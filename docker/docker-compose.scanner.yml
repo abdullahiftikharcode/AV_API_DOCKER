@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  virus-scanner-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - VIRUS_SCANNER_PORT=8080
+      - VIRUS_SCANNER_HOST=0.0.0.0
+      - MAX_FILE_SIZE_MB=1536
+      - SCAN_TIMEOUT_SECONDS=300
+      - TEMP_DIR=/tmp/virus-scanner
+      - LOG_LEVEL=INFO
+      - MAX_CONCURRENT_SCANS=2
+      - MEMORY_LIMIT_MB=4000
+      - ENABLE_RESULT_CACHING=true
+      - CACHE_TTL_HOURS=24
+    volumes:
+      - ../data/ml_models:/app/data/ml_models
+      - ../data/threat_intel:/app/data/threat_intel
+      - ../rules:/app/rules
+      - virus-scanner-temp:/tmp/virus-scanner
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+        reservations:
+          memory: 3G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  # Build the scanner image (this service is just for building)
+  virus-scanner-scanner:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.scanner
+    image: docker-virus-scanner-scanner:latest
+    # This service doesn't run, it's just for building the image
+
+volumes:
+  virus-scanner-temp:
+    driver: local 

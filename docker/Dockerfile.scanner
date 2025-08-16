@@ -1,0 +1,325 @@
+FROM python:3.11-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    clamav \
+    clamav-daemon \
+    dos2unix \
+    libmagic1 \
+    gcc \
+    g++ \
+    libyara-dev \
+    make \
+    wget \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set up Python environment and install dependencies FIRST (to preserve cache)
+WORKDIR /app
+
+# Copy base requirements first (large, stable dependencies)
+COPY docker/requirements-base.txt .
+
+# Install base dependencies (these rarely change - includes torch, lightgbm, etc.)
+RUN pip install -r requirements-base.txt --timeout 120 --index-url https://pypi.org/simple
+
+# Copy app requirements (smaller, more frequently changing dependencies)
+COPY docker/requirements-app.txt .
+
+# Install app dependencies (these change more frequently)
+RUN pip install -r requirements-app.txt --timeout 120 --index-url https://pypi.org/simple
+
+# EMBER2024 installation removed
+
+# Create ClamAV config (same as main container)
+RUN echo 'LogFile /var/log/clamav/clamd.log\n\
+LogTime yes\n\
+LogVerbose yes\n\
+PidFile /var/run/clamav/clamd.pid\n\
+DatabaseDirectory /var/lib/clamav\n\
+LocalSocket /var/run/clamav/clamd.sock\n\
+FixStaleSocket yes\n\
+User clamav\n\
+Foreground yes\n\
+Debug yes\n\
+\n\
+# Scan Settings\n\
+ScanPE yes\n\
+ScanELF yes\n\
+ScanOLE2 yes\n\
+ScanPDF yes\n\
+ScanHTML yes\n\
+ScanMail yes\n\
+ScanArchive yes\n\
+AlertBrokenExecutables yes\n\
+AlertEncrypted yes\n\
+AlertEncryptedDoc yes\n\
+AlertOLE2Macros yes\n\
+DetectPUA yes\n\
+IncludePUA Test\n\
+\n\
+# Resource Limits\n\
+MaxDirectoryRecursion 15\n\
+MaxFileSize 1536M\n\
+MaxScanSize 1536M\n\
+MaxFiles 10000\n\
+MaxRecursion 10\n\
+MaxEmbeddedPE 10M\n\
+MaxHTMLNormalize 10M\n\
+MaxHTMLNoTags 2M\n\
+MaxScriptNormalize 5M\n\
+MaxZipTypeRcg 1M\n\
+MaxPartitions 50\n\
+MaxIconsPE 100\n\
+StreamMaxLength 1536M\n\
+\n\
+# Performance Settings\n\
+MaxThreads 1\n\
+ReadTimeout 180\n\
+CommandReadTimeout 30\n\
+SendBufTimeout 200\n\
+IdleTimeout 30\n\
+SelfCheck 3600\n\
+MaxQueue 100\n\
+\n\
+# Detection Settings\n\
+AlgorithmicDetection yes\n\
+ExtendedDetectionInfo yes\n\
+PhishingSignatures yes\n\
+PhishingScanURLs yes\n\
+HeuristicAlerts yes\n\
+HeuristicScanPrecedence yes\n\
+StructuredDataDetection yes\n\
+OLE2BlockMacros no\n\
+BytecodeMode Auto\n\
+BytecodeTimeout 60000\n\
+BytecodeUnsigned yes\n\
+\n\
+# Other Settings\n\
+CrossFilesystems yes\n\
+FollowDirectorySymlinks yes\n\
+FollowFileSymlinks yes\n\
+' > /etc/clamav/clamd.conf \
+    && dos2unix /etc/clamav/clamd.conf \
+    && chown clamav:clamav /etc/clamav/clamd.conf \
+    && chmod 644 /etc/clamav/clamd.conf
+
+# Create necessary directories and set permissions
+RUN mkdir -p /var/run/clamav /var/log/clamav \
+    && chown -R clamav:clamav /var/run/clamav \
+    && chown -R clamav:clamav /var/log/clamav \
+    && chmod 750 /var/run/clamav \
+    && chmod 750 /var/log/clamav \
+    && mkdir -p /var/lib/clamav \
+    && chown -R clamav:clamav /var/lib/clamav \
+    && chmod 750 /var/lib/clamav
+
+# Install socat for socket testing (keeping separate to preserve Python cache)
+RUN apt-get update && apt-get install -y socat && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Download and update ClamAV virus databases
+RUN freshclam --quiet \
+    && if [ ! -f /var/lib/clamav/main.cvd ]; then \
+        echo "Downloading main.cvd..." && \
+        wget -q -O /var/lib/clamav/main.cvd https://database.clamav.net/main.cvd; \
+    fi \
+    && if [ ! -f /var/lib/clamav/daily.cvd ]; then \
+        echo "Downloading daily.cvd..." && \
+        wget -q -O /var/lib/clamav/daily.cvd https://database.clamav.net/daily.cvd; \
+    fi \
+    && if [ ! -f /var/lib/clamav/bytecode.cvd ]; then \
+        echo "Downloading bytecode.cvd..." && \
+        wget -q -O /var/lib/clamav/bytecode.cvd https://database.clamav.net/bytecode.cvd; \
+    fi \
+    && echo "Virus definitions downloaded successfully" \
+    && ls -la /var/lib/clamav/ \
+    && mkdir -p /app/clamav-db \
+    && cp /var/lib/clamav/*.cvd /app/clamav-db/ \
+    && chmod 644 /app/clamav-db/*.cvd \
+    && chown -R root:root /app/clamav-db
+
+# Copy ML models and data (these rarely change - good for caching)
+COPY data/ml_models /app/data/ml_models/
+COPY data/threat_intel /app/data/threat_intel/
+
+# Qu1cksc0pe removed - no longer needed
+
+# EMBER features file removed
+
+
+# Copy application code (this will invalidate cache only when app code changes)
+COPY app app/
+COPY rules rules/
+
+# Create required directories for the application
+RUN mkdir -p /app/data/ml_models \
+    && mkdir -p /app/data/yara_rules \
+    && mkdir -p /app/data/threat_intel \
+    && mkdir -p /app/temp \
+    && chmod 755 /app/data \
+    && chmod 755 /app/data/ml_models \
+    && chmod 755 /app/data/yara_rules \
+    && chmod 755 /app/data/threat_intel \
+    && chmod 755 /app/temp
+
+# Create startup script for scan worker
+RUN echo '#!/bin/bash\n\
+# Network security is handled at application level\n\
+echo "Network security: Application-level restrictions active for MalwareBazaar API only"\n\
+\n\
+# Create user-writable directories for ClamAV\n\
+mkdir -p /tmp/clamav/run /tmp/clamav/log /tmp/clamav/lib /tmp/clamav/db\n\
+\n\
+# Copy ClamAV databases from build-time location to runtime tmpfs location\n\
+echo "Copying ClamAV databases..."\n\
+echo "Checking /app/clamav-db directory..."\n\
+ls -la /app/clamav-db/ || echo "Cannot list /app/clamav-db"\n\
+if [ -d /app/clamav-db ] && [ "$(ls -A /app/clamav-db/*.cvd 2>/dev/null)" ]; then\n\
+    echo "Found ClamAV databases, copying..."\n\
+    cp /app/clamav-db/*.cvd /tmp/clamav/db/\n\
+    chmod 644 /tmp/clamav/db/*.cvd\n\
+    echo "ClamAV databases copied successfully"\n\
+else\n\
+    echo "Warning: No ClamAV databases found in /app/clamav-db"\n\
+fi\n\
+\n\
+# Debug: Check if databases exist in user-writable location\n\
+echo "=== CLAMAV DATABASE DEBUG ==="\n\
+ls -la /tmp/clamav/db/\n\
+echo "=== END DATABASE DEBUG ==="\n\
+\n\
+# Create a minimal ClamAV config for user mode\n\
+cat > /tmp/clamav/clamd.conf << EOF\n\
+LogFile /tmp/clamav/log/clamd.log\n\
+LogTime yes\n\
+LogVerbose yes\n\
+PidFile /tmp/clamav/run/clamd.pid\n\
+DatabaseDirectory /tmp/clamav/db\n\
+LocalSocket /tmp/clamav/run/clamd.sock\n\
+FixStaleSocket yes\n\
+Foreground yes\n\
+Debug yes\n\
+\n\
+# Scan Settings\n\
+ScanPE yes\n\
+ScanELF yes\n\
+ScanOLE2 yes\n\
+ScanPDF yes\n\
+ScanHTML yes\n\
+ScanMail yes\n\
+ScanArchive yes\n\
+AlertBrokenExecutables yes\n\
+AlertEncrypted yes\n\
+AlertEncryptedDoc yes\n\
+AlertOLE2Macros yes\n\
+DetectPUA yes\n\
+IncludePUA Test\n\
+\n\
+# Resource Limits\n\
+MaxDirectoryRecursion 15\n\
+MaxFileSize 1536M\n\
+MaxScanSize 1536M\n\
+MaxFiles 10000\n\
+MaxRecursion 10\n\
+MaxEmbeddedPE 10M\n\
+MaxHTMLNormalize 10M\n\
+MaxHTMLNoTags 2M\n\
+MaxScriptNormalize 5M\n\
+MaxZipTypeRcg 1M\n\
+MaxPartitions 50\n\
+MaxIconsPE 100\n\
+StreamMaxLength 1536M\n\
+\n\
+# Performance Settings\n\
+MaxThreads 1\n\
+ReadTimeout 180\n\
+CommandReadTimeout 30\n\
+SendBufTimeout 200\n\
+IdleTimeout 30\n\
+SelfCheck 3600\n\
+MaxQueue 100\n\
+\n\
+# Detection Settings\n\
+AlgorithmicDetection yes\n\
+ExtendedDetectionInfo yes\n\
+PhishingSignatures yes\n\
+PhishingScanURLs yes\n\
+HeuristicAlerts yes\n\
+HeuristicScanPrecedence yes\n\
+StructuredDataDetection yes\n\
+OLE2BlockMacros no\n\
+BytecodeMode Auto\n\
+BytecodeTimeout 60000\n\
+BytecodeUnsigned yes\n\
+\n\
+# Other Settings\n\
+CrossFilesystems yes\n\
+FollowDirectorySymlinks yes\n\
+FollowFileSymlinks yes\n\
+EOF\n\
+\n\
+# Start ClamAV daemon with user config\n\
+echo "Starting ClamAV daemon..."\n\
+clamd --config-file=/tmp/clamav/clamd.conf --foreground --debug &\n\
+CLAMAV_PID=$!\n\
+\n\
+# Wait for ClamAV to be ready\n\
+RETRIES=0\n\
+MAX_RETRIES=60\n\
+while [ ! -S /tmp/clamav/run/clamd.sock ] || ! echo "PING" | socat - UNIX-CONNECT:/tmp/clamav/run/clamd.sock > /dev/null 2>&1; do\n\
+    echo "Waiting for ClamAV socket... (attempt $((RETRIES + 1))/$MAX_RETRIES)"\n\
+    sleep 2\n\
+    RETRIES=$((RETRIES + 1))\n\
+    if [ $RETRIES -ge $MAX_RETRIES ]; then\n\
+        echo "ClamAV not ready after $MAX_RETRIES attempts, continuing anyway..."\n\
+        break\n\
+    fi\n\
+    if ! ps -p $CLAMAV_PID > /dev/null; then\n\
+        echo "ClamAV daemon failed to start!"\n\
+        exit 1\n\
+    fi\n\
+done\n\
+\n\
+# Test ClamAV\n\
+echo "Testing ClamAV..."\n\
+clamdscan --version\n\
+\n\
+# Debug: Print environment variables and config\n\
+echo "=== CONFIGURATION DEBUG ==="\n\
+echo "Environment variables:"\n\
+echo "SCAN_FILE_PATH: $SCAN_FILE_PATH"\n\
+echo "SCAN_TIMEOUT: $SCAN_TIMEOUT"\n\
+echo "SCAN_MODE: $SCAN_MODE"\n\
+echo "=== END DEBUG ==="\n\
+\n\
+# Method 1: Check environment variables (primary method)\n\
+if [ -n "$SCAN_FILE_PATH" ] && [ -n "$SCAN_TIMEOUT" ]; then\n\
+    echo "Using environment variables: SCAN_FILE_PATH=$SCAN_FILE_PATH, SCAN_TIMEOUT=$SCAN_TIMEOUT"\n\
+    exec python /app/app/scanner/scan_worker.py --file "$SCAN_FILE_PATH" --timeout "$SCAN_TIMEOUT"\n\
+fi\n\
+\n\
+# Method 2: Check if config file exists\n\
+if [ -f /scan_config.env ]; then\n\
+    echo "Loading configuration from /scan_config.env"\n\
+    source /scan_config.env\n\
+    if [ -n "$SCAN_FILE_PATH" ] && [ -n "$SCAN_TIMEOUT" ]; then\n\
+        echo "Using config file: SCAN_FILE_PATH=$SCAN_FILE_PATH, SCAN_TIMEOUT=$SCAN_TIMEOUT"\n\
+        exec python /app/app/scanner/scan_worker.py --file "$SCAN_FILE_PATH" --timeout "$SCAN_TIMEOUT"\n\
+    fi\n\
+fi\n\
+\n\
+# Method 3: Fallback - try to find files in /scan directory\n\
+echo "No configuration found, checking /scan directory..."\n\
+if [ -d /scan ] && [ "$(ls -A /scan)" ]; then\n\
+    SCAN_FILE=$(ls /scan/* | head -n1)\n\
+    echo "Found file in /scan: $SCAN_FILE"\n\
+    exec python /app/app/scanner/scan_worker.py --file "$SCAN_FILE" --timeout "${SCAN_TIMEOUT:-300}"\n\
+fi\n\
+\n\
+# Method 4: Last resort - show help\n\
+echo "No configuration or files found, showing help..."\n\
+exec python /app/app/scanner/scan_worker.py --help\n\
+' > /start.sh && chmod +x /start.sh
+
+# Set the default command
+CMD ["/start.sh"] 

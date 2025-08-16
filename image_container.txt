@@ -1,0 +1,71 @@
+┌─────────────────────────────────────────────────────────┐
+│                Build Process                           │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │           Build Child Image                     │   │
+│  │                                               │   │
+│  │  cd docker                                    │   │
+│  │  docker build -f Dockerfile.scanner           │   │
+│  │  -t virus-scanner-child .                     │   │
+│  └─────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────┐
+│                API Container                          │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │           FastAPI Application                  │   │
+│  │                                               │   │
+│  │  POST /api/scan                              │   │
+│  │  ↓                                           │   │
+│  │  container_manager.scan_file_stream()        │   │
+│  │  ↓                                           │   │
+│  │  docker.from_env()                           │   │
+│  │  ↓                                           │   │
+│  │  Create child container                      │   │
+│  │  ↓                                           │   │
+│  │  Pass env vars:                              │   │
+│  │  - HMAC_SECRET_KEY                           │   │
+│  │  - MALWAREBazaar_API_KEY                     │   │
+│  │  - MALWAREBazaar_API_KEY_BACKUP              │   │
+│  └─────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │           Docker Socket Mount                 │   │
+│  │  /var/run/docker.sock:/var/run/docker.sock   │   │
+│  └─────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │           Environment Variables               │   │
+│  │  Loaded from .env via docker-compose         │   │
+│  │  env_file: - ../.env                         │   │
+│  └─────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────┐
+│              Child Container                          │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │              Scan Worker                       │   │
+│  │                                               │   │
+│  │  EnsembleScanner                              │   │
+│  │  ↓                                           │   │
+│  │  Bytescale API (first priority, <500MB)      │   │
+│  │  ↓                                           │   │
+│  │  ClamAV + YARA + ML Models                   │   │
+│  │  ↓                                           │   │
+│  │  MalwareBazaar API (via env vars)            │   │
+│  │  ↓                                           │   │
+│  │  Return JSON result                          │   │
+│  └─────────────────────────────────────────────────┘   │
+│  ┌─────────────────────────────────────────────────┐   │
+│  │           Environment Variables               │   │
+│  │  Passed from parent container:               │   │
+│  │  - HMAC_SECRET_KEY                           │   │
+│  │  - MALWAREBazaar_API_KEY                     │   │
+│  │  - MALWAREBazaar_API_KEY_BACKUP              │   │
+│  │  - MALWAREBazaar_ENABLED                     │   │
+│  │  - MALWAREBazaar_TIMEOUT                     │   │
+│  │  - BYTESCALE_API_KEY                         │   │
+│  │  - BYTESCALE_ENABLED                         │   │
+│  │  - BYTESCALE_MAX_FILE_SIZE_MB                │   │
+│  │  - BYTESCALE_TIMEOUT                         │   │
+│  └─────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────┘

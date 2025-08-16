@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  virus-scanner:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8080:8080"
+    env_file:
+      - ../.env
+    environment:
+      - VIRUS_SCANNER_PORT=8080
+      - VIRUS_SCANNER_HOST=0.0.0.0
+      - MAX_FILE_SIZE_MB=1536
+      - SCAN_TIMEOUT_SECONDS=300
+      - TEMP_DIR=/tmp/virus-scanner
+      - LOG_LEVEL=INFO
+      - MAX_CONCURRENT_SCANS=2
+      - MEMORY_LIMIT_MB=4000
+      - ENABLE_RESULT_CACHING=true
+      - CACHE_TTL_HOURS=24
+    volumes:
+      - ../data/ml_models:/app/data/ml_models
+      - ../data/threat_intel:/app/data/threat_intel
+      - ../rules:/app/rules
+      - virus-scanner-temp:/tmp/virus-scanner
+      - virus-scanner-clamav:/var/lib/clamav  # Persist ClamAV virus definitions
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for child container creation
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+        reservations:
+          memory: 3G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+volumes:
+  virus-scanner-temp:
+    driver: local
+  virus-scanner-clamav:
+    driver: local

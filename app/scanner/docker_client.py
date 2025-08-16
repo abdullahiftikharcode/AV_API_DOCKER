@@ -181,6 +181,106 @@ class DockerClient:
         except:
             return None
 
+    def stream_container_logs(self, container_id: str, timeout: int = 300) -> Optional[str]:
+        """
+        Stream container logs in real-time and capture them.
+        This method ensures logs are captured even on Linux servers where
+        post-completion log retrieval might fail.
+        """
+        try:
+            import time
+            import threading
+            from queue import Queue
+            
+            logs_buffer = []
+            logs_queue = Queue()
+            stop_streaming = threading.Event()
+            
+            def log_reader():
+                """Background thread to continuously read logs"""
+                try:
+                    # Get logs every 100ms to capture real-time output
+                    while not stop_streaming.is_set():
+                        try:
+                            response = self._request(
+                                'GET',
+                                f'/v1.41/containers/{container_id}/logs?stdout=true&stderr=true&tail=100'
+                            )
+                            if response.status_code == 200 and response.text.strip():
+                                # Split logs into lines and add new ones
+                                new_lines = response.text.strip().split('\n')
+                                for line in new_lines:
+                                    if line.strip() and line not in logs_buffer:
+                                        logs_buffer.append(line)
+                                        logs_queue.put(line)
+                            time.sleep(0.1)  # 100ms interval
+                        except Exception as e:
+                            logger.warning("log_streaming_error", container_id=container_id, error=str(e))
+                            time.sleep(0.5)  # Longer interval on error
+                except Exception as e:
+                    logger.error("log_reader_thread_error", container_id=container_id, error=str(e))
+            
+            # Start background log reader
+            reader_thread = threading.Thread(target=log_reader, daemon=True)
+            reader_thread.start()
+            
+            # Wait for container completion or timeout
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                # Check if container is still running
+                try:
+                    response = self._request('GET', f'/v1.41/containers/{container_id}/json')
+                    if response.status_code == 200:
+                        container_info = response.json()
+                        if not container_info.get('State', {}).get('Running', False):
+                            break  # Container finished
+                except:
+                    pass
+                
+                time.sleep(0.5)
+            
+            # Stop streaming and wait for thread to finish
+            stop_streaming.set()
+            reader_thread.join(timeout=2)
+            
+            # Get final logs
+            final_logs = self.get_container_logs(container_id) or ''
+            
+            # Combine streamed logs with final logs
+            all_logs = '\n'.join(logs_buffer)
+            if final_logs:
+                all_logs += '\n' + final_logs
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_logs = []
+            for line in all_logs.split('\n'):
+                if line.strip() and line not in seen:
+                    seen.add(line)
+                    unique_logs.append(line)
+            
+            return '\n'.join(unique_logs)
+            
+        except Exception as e:
+            logger.error("stream_container_logs_error", container_id=container_id, error=str(e))
+            # Fallback to regular log retrieval
+            return self.get_container_logs(container_id)
+
+    async def stream_container_logs_async(self, container_id: str, timeout: int = 300) -> Optional[str]:
+        """Asynchronously stream container logs."""
+        import asyncio
+        
+        try:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None, 
+                lambda: self.stream_container_logs(container_id, timeout)
+            )
+            return result
+        except Exception as e:
+            logger.error("stream_container_logs_async_error", container_id=container_id, error=str(e))
+            return None
+
     async def get_container_logs_async(self, container_id: str, stdout: bool = True, stderr: bool = True) -> Optional[str]:
         """Asynchronously get container logs."""
         import asyncio

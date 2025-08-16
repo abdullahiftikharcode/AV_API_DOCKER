@@ -293,8 +293,38 @@ FILE_SIZE={len(file_content)}
                     'logs': ''
                 }
             
-            # Get logs asynchronously
-            logs = await client.get_container_logs_async(container_id) or ''
+            # Get logs using streaming method to ensure capture on all platforms
+            logs = await client.stream_container_logs_async(container_id, timeout=timeout) or ''
+            
+            # If streaming failed, fallback to regular method
+            if not logs.strip():
+                logger.warning("streaming_logs_failed_fallback", container_id=container_id)
+                logs = await client.get_container_logs_async(container_id) or ''
+            
+            # If still no logs, try capturing during execution as final fallback
+            if not logs.strip():
+                logger.warning("regular_logs_failed_fallback", container_id=container_id)
+                logs = await self.capture_container_logs_during_execution(container_id, timeout) or ''
+            
+            # Final fallback - try to get logs directly from Docker daemon
+            if not logs.strip():
+                logger.warning("all_log_methods_failed", container_id=container_id)
+                try:
+                    # Try to get logs with different parameters
+                    logs = await client.get_container_logs_async(container_id, stdout=True, stderr=True) or ''
+                    if not logs.strip():
+                        # Try with different log format
+                        import subprocess
+                        result = subprocess.run(
+                            ['docker', 'logs', container_id], 
+                            capture_output=True, 
+                            text=True, 
+                            timeout=10
+                        )
+                        if result.returncode == 0:
+                            logs = result.stdout + result.stderr
+                except Exception as e:
+                    logger.error("final_log_fallback_failed", container_id=container_id, error=str(e))
             
             # Parse result
             exit_code = result.get('StatusCode', 1)
@@ -373,6 +403,54 @@ FILE_SIZE={len(file_content)}
                 'error': f'Container wait failed: {str(e)}',
                 'logs': ''
             }
+
+    async def capture_container_logs_during_execution(self, container_id: str, timeout: int) -> str:
+        """
+        Capture container logs during execution, not just after completion.
+        This method provides an additional fallback for Linux servers.
+        """
+        try:
+            client = self._get_docker_client()
+            logs_buffer = []
+            
+            # Monitor container and capture logs every 500ms
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                try:
+                    # Check if container is still running
+                    response = client._request('GET', f'/v1.41/containers/{container_id}/json')
+                    if response.status_code == 200:
+                        container_info = response.json()
+                        if not container_info.get('State', {}).get('Running', False):
+                            break  # Container finished
+                    
+                    # Get current logs
+                    current_logs = client.get_container_logs(container_id) or ''
+                    if current_logs.strip():
+                        new_lines = current_logs.strip().split('\n')
+                        for line in new_lines:
+                            if line.strip() and line not in logs_buffer:
+                                logs_buffer.append(line)
+                    
+                    await asyncio.sleep(0.5)  # 500ms interval
+                    
+                except Exception as e:
+                    logger.warning("log_capture_error", container_id=container_id, error=str(e))
+                    await asyncio.sleep(1)
+            
+            # Get final logs
+            final_logs = client.get_container_logs(container_id) or ''
+            if final_logs.strip():
+                final_lines = final_logs.strip().split('\n')
+                for line in final_lines:
+                    if line.strip() and line not in logs_buffer:
+                        logs_buffer.append(line)
+            
+            return '\n'.join(logs_buffer)
+            
+        except Exception as e:
+            logger.error("capture_container_logs_during_execution_error", container_id=container_id, error=str(e))
+            return ""
     
     async def cleanup_container(self, container_id: str):
         """Clean up container and temporary files."""

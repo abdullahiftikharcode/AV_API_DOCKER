@@ -1,0 +1,624 @@
+import asyncio
+from .docker_client import DockerClient
+import tempfile
+import os
+import time
+import structlog
+from pathlib import Path
+from typing import Optional, Dict, Any, List
+from dataclasses import dataclass
+from ..config import settings
+from fastapi import HTTPException
+
+logger = structlog.get_logger()
+
+@dataclass
+class ContainerScanResult:
+    """Result from container-based scan."""
+    safe: bool
+    threats: list
+    scan_time: str
+    scan_duration_ms: int  # Pure scanning time (excluding initialization overhead)
+    container_duration_ms: int  # Total container time including all overhead
+    file_size: int
+    file_name: str
+    scan_engine: str
+    error: Optional[str] = None
+
+
+class ContainerManager:
+    """Manages per-request container creation and cleanup."""
+    
+    def __init__(self):
+        self.docker_client = None
+        self.container_image = "virus-scanner-scanner:latest"
+        self.scan_timeout = settings.SCAN_TIMEOUT_SECONDS
+        self.max_memory = "4g"  # Updated to 4GB for concurrent containers
+        self.max_cpu = "1.0"    # Updated to 1 CPU core for concurrent containers
+    
+    def get_allowed_extensions(self) -> List[str]:
+        """Get list of allowed file extensions from settings."""
+        return settings.ALLOWED_EXTENSIONS
+    
+    def _get_docker_client(self):
+        """Get Docker client, initializing if needed."""
+        if self.docker_client is None:
+            # Use Docker socket (mounted in container)
+            try:
+                # Create Docker client with Unix socket
+                self.docker_client = DockerClient()
+                if self.docker_client.ping():
+                    logger.info("docker_client_initialized", base_url='unix:///var/run/docker.sock')
+                    return self.docker_client
+                else:
+                    logger.error("docker_client_ping_failed")
+                    self.docker_client = None
+            except Exception as e:
+                logger.error("docker_client_init_failed", error=str(e))
+                self.docker_client = None
+            
+            # If all methods failed
+            raise Exception("Failed to initialize Docker client with any connection method")
+        return self.docker_client
+        
+    async def create_scan_container(self, file_path: Path, file_hash: str) -> Optional[str]:
+        """Create a fresh container for scanning."""
+        try:
+            # Read the file content to pass to the child container
+            with open(file_path, 'rb') as f:
+                file_content = f.read()
+            
+            # Create a temporary file name for the scan
+            scan_filename = file_path.name
+            
+            # Create container but don't start yet
+            client = self._get_docker_client()
+            
+            # Use environment variables and file-based configuration instead of command-line arguments
+            container_config = {
+                'image': self.container_image,
+                'command': ['/start.sh'],  # Just call the start script without arguments
+                'volumes': {
+                    str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'}
+                },
+                'environment': {
+                    'MAX_FILE_SIZE_MB': str(settings.MAX_FILE_SIZE_MB),
+                    'SCAN_TIMEOUT_SECONDS': str(settings.SCAN_TIMEOUT_SECONDS),
+                    'ML_ENABLE_PE_ANALYSIS': str(settings.ML_ENABLE_PE_ANALYSIS),
+                    'ML_ENABLE_ENTROPY_ANALYSIS': str(settings.ML_ENABLE_ENTROPY_ANALYSIS),
+                    # Primary method: Environment variables
+                    'SCAN_FILE_PATH': f'/scan/{scan_filename}',
+                    'SCAN_TIMEOUT': str(self.scan_timeout),
+                    'SCAN_MODE': 'environment',
+                    # Pass through HMAC configuration to child containers
+                    'HMAC_SECRET_KEY': os.environ.get('HMAC_SECRET_KEY', ''),
+                    'HMAC_ENABLED': str(settings.HMAC_ENABLED),
+                    'HMAC_TIMESTAMP_TOLERANCE_SECONDS': str(settings.HMAC_TIMESTAMP_TOLERANCE_SECONDS),
+                    # Pass through MalwareBazaar API configuration to child containers
+                    'MALWAREBazaar_API_KEY': os.environ.get('MALWAREBazaar_API_KEY', ''),
+                    'MALWAREBazaar_API_KEY_BACKUP': os.environ.get('MALWAREBazaar_API_KEY_BACKUP', ''),
+                    'MALWAREBazaar_ENABLED': str(settings.MALWAREBazaar_ENABLED),
+                    'MALWAREBazaar_TIMEOUT': str(settings.MALWAREBazaar_TIMEOUT),
+                    # Pass through Bytescale API configuration to child containers
+                    'BYTESCALE_API_KEY': os.environ.get('BYTESCALE_API_KEY', ''),
+                    'BYTESCALE_ACCOUNT_ID': os.environ.get('BYTESCALE_ACCOUNT_ID', ''),
+                    'BYTESCALE_ENABLED': str(settings.BYTESCALE_ENABLED),
+                    'BYTESCALE_TIMEOUT': str(settings.BYTESCALE_TIMEOUT)
+                },
+                'mem_limit': self.max_memory,
+                'cpu_period': 100000,
+                'cpu_quota': int(float(self.max_cpu) * 100000),
+                'network_disabled': False,  # Enable limited network access for MalwareBazaar API
+                'read_only': False,  # Allow writes for ClamAV logs
+                'tmpfs': {'/tmp': 'size=400m'},  # Temporary filesystem (increased for ClamAV databases)
+                'detach': False
+            }
+            
+            # Log the container config for debugging
+            logger.info("creating_container_with_config", config=container_config)
+            
+            container_id = client.create_container(container_config)
+            if not container_id:
+                logger.error("container_creation_failed")
+                return None
+            
+            logger.info("container_created_successfully", container_id=container_id)
+            
+            # Start the container first before executing commands
+            if not client.start_container(container_id):
+                logger.error("container_start_failed", container_id=container_id)
+                client.remove_container(container_id, force=True)
+                return None
+            
+            logger.info("container_started", container_id=container_id)
+            
+            # Create the /scan directory in the container
+            exec_result = client.exec_in_container(container_id, ['mkdir', '-p', '/scan'])
+            if not exec_result or exec_result.get('ExitCode', 1) != 0:
+                logger.error("failed_to_create_scan_dir", container_id=container_id)
+                client.remove_container(container_id, force=True)
+                return None
+            
+            # Copy file content to the container
+            import tarfile
+            import io
+            
+            # Create a tar archive with the file
+            tar_buffer = io.BytesIO()
+            with tarfile.open(fileobj=tar_buffer, mode='w') as tar:
+                # Create tarinfo for the file
+                tarinfo = tarfile.TarInfo(name=scan_filename)
+                tarinfo.size = len(file_content)
+                tarinfo.mode = 0o644
+                
+                # Add the file to the tar
+                tar.addfile(tarinfo, io.BytesIO(file_content))
+            
+            # Copy the tar archive to the container
+            tar_buffer.seek(0)
+            if not client.put_archive(container_id, '/scan', tar_buffer.getvalue()):
+                logger.error("failed_to_copy_file", container_id=container_id)
+                client.remove_container(container_id, force=True)
+                return None
+            
+            logger.info("file_copied_to_container", container_id=container_id, filename=scan_filename, file_size=len(file_content))
+            
+            # Create a configuration file with scan parameters
+            config_content = f'''# Scan configuration file - created by container manager
+SCAN_FILE_PATH={f'/scan/{scan_filename}'}
+SCAN_TIMEOUT={self.scan_timeout}
+SCAN_MODE=file
+FILE_NAME={scan_filename}
+FILE_SIZE={len(file_content)}
+'''
+            
+            # Create config file in container
+            config_tar = io.BytesIO()
+            with tarfile.open(fileobj=config_tar, mode='w') as tar:
+                # Create tarinfo for the config file
+                tarinfo = tarfile.TarInfo(name='scan_config.env')
+                tarinfo.size = len(config_content.encode())
+                tarinfo.mode = 0o644
+                
+                # Add the config file to the tar
+                tar.addfile(tarinfo, io.BytesIO(config_content.encode()))
+            
+            # Copy config file to container
+            config_tar.seek(0)
+            if not client.put_archive(container_id, '/', config_tar.getvalue()):
+                logger.warning("failed_to_copy_config_file", container_id=container_id)
+            
+            logger.info("container_ready", container_id=container_id, file_hash=file_hash)
+            
+            return container_id
+            
+        except Exception as e:
+            logger.error("container_creation_failed", error=str(e), file_hash=file_hash)
+            return None
+
+    async def create_streaming_container(self, filename: str) -> Optional[str]:
+        """Create a fresh container for streaming file uploads."""
+        try:
+            # Create a temporary file name for the scan
+            scan_filename = filename
+            
+            # Create container but don't start yet
+            client = self._get_docker_client()
+            
+            # Use environment variables and file-based configuration instead of command-line arguments
+            container_config = {
+                'image': self.container_image,
+                'command': ['/start.sh'],  # Just call the start script without arguments
+                'volumes': {
+                    str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'}
+                },
+                'environment': {
+                    'MAX_FILE_SIZE_MB': str(settings.MAX_FILE_SIZE_MB),
+                    'SCAN_TIMEOUT_SECONDS': str(settings.SCAN_TIMEOUT_SECONDS),
+                    'ML_ENABLE_PE_ANALYSIS': str(settings.ML_ENABLE_PE_ANALYSIS),
+                    'ML_ENABLE_ENTROPY_ANALYSIS': str(settings.ML_ENABLE_ENTROPY_ANALYSIS),
+                    # Primary method: Environment variables
+                    'SCAN_FILE_PATH': f'/scan/{scan_filename}',
+                    'SCAN_TIMEOUT': str(self.scan_timeout),
+                    'SCAN_MODE': 'streaming',
+                    # Pass through HMAC configuration to child containers
+                    'HMAC_SECRET_KEY': os.environ.get('HMAC_SECRET_KEY', ''),
+                    'HMAC_ENABLED': str(settings.HMAC_ENABLED),
+                    'HMAC_TIMESTAMP_TOLERANCE_SECONDS': str(settings.HMAC_TIMESTAMP_TOLERANCE_SECONDS),
+                    # Pass through MalwareBazaar API configuration to child containers
+                    'MALWAREBazaar_API_KEY': os.environ.get('MALWAREBazaar_API_KEY', ''),
+                    'MALWAREBazaar_API_KEY_BACKUP': os.environ.get('MALWAREBazaar_API_KEY_BACKUP', ''),
+                    'MALWAREBazaar_ENABLED': str(settings.MALWAREBazaar_ENABLED),
+                    'MALWAREBazaar_TIMEOUT': str(settings.MALWAREBazaar_TIMEOUT),
+                    # Pass through Bytescale API configuration to child containers
+                    'BYTESCALE_API_KEY': os.environ.get('BYTESCALE_API_KEY', ''),
+                    'BYTESCALE_ACCOUNT_ID': os.environ.get('BYTESCALE_ACCOUNT_ID', ''),
+                    'BYTESCALE_ENABLED': str(settings.BYTESCALE_ENABLED),
+                    'BYTESCALE_TIMEOUT': str(settings.BYTESCALE_TIMEOUT)
+                },
+                'mem_limit': self.max_memory,
+                'cpu_period': 100000,
+                'cpu_quota': int(float(self.max_cpu) * 100000),
+                'network_disabled': False,  # Enable limited network access for MalwareBazaar API
+                'read_only': False,  # Allow writes for ClamAV logs
+                'tmpfs': {'/tmp': 'size=400m'},  # Temporary filesystem (increased for ClamAV databases)
+                'detach': False
+            }
+            
+            # Log the container config for debugging
+            logger.info("creating_streaming_container_with_config", config=container_config)
+            
+            container_id = client.create_container(container_config)
+            if not container_id:
+                logger.error("streaming_container_creation_failed")
+                return None
+            
+            logger.info("streaming_container_created_successfully", container_id=container_id)
+            
+            # Start the container first before executing commands
+            if not client.start_container(container_id):
+                logger.error("streaming_container_start_failed", container_id=container_id)
+                client.remove_container(container_id, force=True)
+                return None
+            
+            logger.info("streaming_container_started", container_id=container_id)
+            
+            # Create the /scan directory in the container
+            exec_result = client.exec_in_container(container_id, ['mkdir', '-p', '/scan'])
+            if not exec_result or exec_result.get('ExitCode', 1) != 0:
+                logger.error("failed_to_create_scan_dir", container_id=container_id)
+                client.remove_container(container_id, force=True)
+                return None
+            
+            logger.info("streaming_container_ready", container_id=container_id, filename=scan_filename)
+            
+            return container_id
+            
+        except Exception as e:
+            logger.error("streaming_container_creation_failed", error=str(e), filename=filename)
+            return None
+    
+    async def wait_for_container_completion(self, container_id: str, timeout: int) -> Dict[str, Any]:
+        """Wait for container to complete and get results."""
+        try:
+            client = self._get_docker_client()
+            
+            # Wait for container to finish asynchronously
+            result = await client.wait_container_async(container_id, timeout=timeout)
+            if not result:
+                logger.error("container_wait_failed", container_id=container_id)
+                return {
+                    'success': False,
+                    'error': 'Container wait failed',
+                    'logs': ''
+                }
+            
+            # Get logs asynchronously
+            logs = await client.get_container_logs_async(container_id) or ''
+            
+            # Parse result
+            exit_code = result.get('StatusCode', 1)
+            
+            logger.info("container_completed", container_id=container_id, exit_code=exit_code, logs_length=len(logs))
+            logger.info("container_logs", logs=logs)
+            
+            if exit_code == 0:
+                # Parse JSON result from logs
+                import json
+                try:
+                    # Find JSON result in logs
+                    lines = logs.strip().split('\n')
+                    logger.info("parsing_logs", lines_count=len(lines))
+                    
+                    # Try to find JSON in the logs (reverse order first for latest result)
+                    import re
+                    
+                    for line in reversed(lines):
+                        # Look for JSON pattern in the line, handling unicode control characters
+                        json_match = re.search(r'\{.*\}', line)
+                        if json_match:
+                            try:
+                                json_str = json_match.group(0)
+                                result_data = json.loads(json_str)
+                                logger.info("json_found", result_data=result_data)
+                                return {
+                                    'success': True,
+                                    'result': result_data,
+                                    'logs': logs
+                                }
+                            except json.JSONDecodeError:
+                                continue
+                    
+                    # If no JSON found in reversed lines, try all lines
+                    for line in lines:
+                        json_match = re.search(r'\{.*\}', line)
+                        if json_match:
+                            try:
+                                json_str = json_match.group(0)
+                                result_data = json.loads(json_str)
+                                logger.info("json_found_forward", result_data=result_data)
+                                return {
+                                    'success': True,
+                                    'result': result_data,
+                                    'logs': logs
+                                }
+                            except json.JSONDecodeError:
+                                continue
+                    
+                    logger.error("no_json_found", logs=logs)
+                    return {
+                        'success': False,
+                        'error': 'No JSON result found in logs',
+                        'logs': logs
+                    }
+                except json.JSONDecodeError as e:
+                    logger.error("json_parse_error", error=str(e), logs=logs)
+                    return {
+                        'success': False,
+                        'error': f'Failed to parse scan result: {str(e)}',
+                        'logs': logs
+                    }
+            else:
+                logger.error("container_failed", exit_code=exit_code, logs=logs)
+                return {
+                    'success': False,
+                    'error': f'Container failed with exit code {exit_code}',
+                    'logs': logs
+                }
+                
+        except Exception as e:
+            logger.error("container_wait_failed", container_id=container_id, error=str(e))
+            return {
+                'success': False,
+                'error': f'Container wait failed: {str(e)}',
+                'logs': ''
+            }
+    
+    async def cleanup_container(self, container_id: str):
+        """Clean up container and temporary files."""
+        try:
+            client = self._get_docker_client()
+            
+            # Force remove container if still running
+            if client.remove_container(container_id, force=True):
+                logger.info("container_cleaned", container_id=container_id)
+            else:
+                logger.warning("container_cleanup_failed", container_id=container_id)
+                
+        except Exception as e:
+            logger.error("container_cleanup_failed", container_id=container_id, error=str(e))
+    
+    async def scan_file_in_container(self, file_path: Path) -> ContainerScanResult:
+        """Scan a file using a fresh container."""
+        start_time = time.time()
+        container_id = None
+        
+        try:
+            # Calculate file hash for unique identification
+            import hashlib
+            with open(file_path, 'rb') as f:
+                file_hash = hashlib.md5(f.read()).hexdigest()
+            
+            # Create fresh container
+            container_id = await self.create_scan_container(file_path, file_hash)
+            if not container_id:
+                return ContainerScanResult(
+                    safe=True,
+                    threats=[],
+                    scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    scan_duration_ms=int((time.time() - start_time) * 1000),
+                    container_duration_ms=0, # Placeholder, will be updated after wait
+                    file_size=file_path.stat().st_size,
+                    file_name=file_path.name,
+                    scan_engine="container_ensemble",
+                    error="Failed to create scan container"
+                )
+            
+            # Wait for completion
+            result = await self.wait_for_container_completion(container_id, self.scan_timeout)
+            
+            # Calculate scan duration
+            scan_duration_ms = int((time.time() - start_time) * 1000)
+            
+            if result['success']:
+                # Extract timing information from the scan worker's JSON response
+                scan_result = result['result']
+                
+                # Get the pure scanning time from the container (excluding initialization)
+                pure_scan_duration_ms = scan_result.get('scanDurationMs', 0)
+                
+                # Get the total container time from the container (including all overhead)
+                container_duration_ms = scan_result.get('containerDurationMs', 0)
+                
+                # If container didn't provide timing, fall back to our measurement
+                if container_duration_ms == 0:
+                    container_duration_ms = scan_duration_ms
+                
+                return ContainerScanResult(
+                    safe=scan_result.get('safe', True),
+                    threats=scan_result.get('threats', []),
+                    scan_time=scan_result.get('scanTime', time.strftime("%Y-%m-%dT%H:%M:%S")),
+                    scan_duration_ms=pure_scan_duration_ms,  # Pure scanning time (excluding initialization)
+                    container_duration_ms=container_duration_ms,  # Total container time including all overhead
+                    file_size=scan_result.get('fileSize', file_path.stat().st_size),
+                    file_name=scan_result.get('fileName', file_path.name),
+                    scan_engine=scan_result.get('scanEngine', 'container_ensemble')
+                )
+            else:
+                return ContainerScanResult(
+                    safe=True,
+                    threats=[],
+                    scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    scan_duration_ms=scan_duration_ms,
+                    container_duration_ms=0, # Placeholder, will be updated after wait
+                    file_size=file_path.stat().st_size,
+                    file_name=file_path.name,
+                    scan_engine="container_ensemble",
+                    error=result['error']
+                )
+                
+        except Exception as e:
+            logger.error("container_scan_failed", error=str(e), file_path=str(file_path))
+            return ContainerScanResult(
+                safe=True,
+                threats=[],
+                scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                scan_duration_ms=int((time.time() - start_time) * 1000),
+                container_duration_ms=0, # Placeholder, will be updated after wait
+                file_size=file_path.stat().st_size,
+                file_name=file_path.name,
+                scan_engine="container_ensemble",
+                error=f"Container scan failed: {str(e)}"
+            )
+        finally:
+            # Always cleanup container
+            if container_id:
+                await self.cleanup_container(container_id)
+
+    async def scan_file_stream(self, upload_file) -> ContainerScanResult:
+        """Scan a file by streaming it directly to a child container without saving to main container."""
+        start_time = time.time()
+        container_id = None
+        
+        try:
+            # Validate file size during streaming
+            file_size = 0
+            chunk_size = 64 * 1024  # 64KB chunks for streaming
+            max_size_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
+            
+            # Create fresh container for streaming
+            container_id = await self.create_streaming_container(upload_file.filename)
+            if not container_id:
+                return ContainerScanResult(
+                    safe=True,
+                    threats=[],
+                    scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    scan_duration_ms=int((time.time() - start_time) * 1000),
+                    container_duration_ms=0,
+                    file_size=0,
+                    file_name=upload_file.filename,
+                    scan_engine="container_ensemble",
+                    error="Failed to create streaming container"
+                )
+            
+            # Stream file content directly to container
+            logger.info("starting_file_stream", container_id=container_id, filename=upload_file.filename)
+            
+            # Create tar archive in memory and stream to container
+            import tarfile
+            import io
+            
+            # First pass: read entire file to get size and validate
+            file_chunks = []
+            while chunk := await upload_file.read(chunk_size):
+                file_size += len(chunk)
+                
+                # Check file size limit
+                if file_size > max_size_bytes:
+                    await self.cleanup_container(container_id)
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Maximum size is {settings.MAX_FILE_SIZE_MB}MB"
+                    )
+                
+                file_chunks.append(chunk)
+            
+            # Create tar archive with complete file
+            tar_buffer = io.BytesIO()
+            with tarfile.open(fileobj=tar_buffer, mode='w') as tar:
+                # Create tarinfo for the file
+                tarinfo = tarfile.TarInfo(name=upload_file.filename)
+                tarinfo.size = file_size
+                tarinfo.mode = 0o644
+                
+                # Combine all chunks and add to tar
+                file_data = b''.join(file_chunks)
+                tar.addfile(tarinfo, io.BytesIO(file_data))
+            
+            # Get tar data
+            tar_buffer.seek(0)
+            tar_data = tar_buffer.getvalue()
+            
+            # Copy tar archive to container
+            client = self._get_docker_client()
+            if not client.put_archive(container_id, '/scan', tar_data):
+                logger.error("failed_to_copy_streamed_file", container_id=container_id)
+                await self.cleanup_container(container_id)
+                return ContainerScanResult(
+                    safe=True,
+                    threats=[],
+                    scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    scan_duration_ms=int((time.time() - start_time) * 1000),
+                    container_duration_ms=0,
+                    file_size=file_size,
+                    file_name=upload_file.filename,
+                    scan_engine="container_ensemble",
+                    error="Failed to copy streamed file to container"
+                )
+            
+            logger.info("file_streamed_to_container", container_id=container_id, filename=upload_file.filename, file_size=file_size)
+            
+            # Wait for completion
+            result = await self.wait_for_container_completion(container_id, self.scan_timeout)
+            
+            # Calculate scan duration
+            scan_duration_ms = int((time.time() - start_time) * 1000)
+            
+            if result['success']:
+                # Extract timing information from the scan worker's JSON response
+                scan_result = result['result']
+                
+                # Get the pure scanning time from the container (excluding initialization)
+                pure_scan_duration_ms = scan_result.get('scanDurationMs', 0)
+                
+                # Get the total container time from the container (including all overhead)
+                container_duration_ms = scan_result.get('containerDurationMs', 0)
+                
+                # If container didn't provide timing, fall back to our measurement
+                if container_duration_ms == 0:
+                    container_duration_ms = scan_duration_ms
+                
+                return ContainerScanResult(
+                    safe=scan_result.get('safe', True),
+                    threats=scan_result.get('threats', []),
+                    scan_time=scan_result.get('scanTime', time.strftime("%Y-%m-%dT%H:%M:%S")),
+                    scan_duration_ms=pure_scan_duration_ms,  # Pure scanning time (excluding initialization)
+                    container_duration_ms=container_duration_ms,  # Total container time including all overhead
+                    file_size=scan_result.get('fileSize', file_size),
+                    file_name=scan_result.get('fileName', upload_file.filename),
+                    scan_engine=scan_result.get('scanEngine', 'container_ensemble')
+                )
+            else:
+                return ContainerScanResult(
+                    safe=True,
+                    threats=[],
+                    scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    scan_duration_ms=scan_duration_ms,
+                    container_duration_ms=0,
+                    file_size=file_size,
+                    file_name=upload_file.filename,
+                    scan_engine="container_ensemble",
+                    error=result['error']
+                )
+                
+        except Exception as e:
+            logger.error("streaming_scan_failed", error=str(e), filename=upload_file.filename)
+            return ContainerScanResult(
+                safe=True,
+                threats=[],
+                scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                scan_duration_ms=int((time.time() - start_time) * 1000),
+                container_duration_ms=0,
+                file_size=0,
+                file_name=upload_file.filename,
+                scan_engine="container_ensemble",
+                error=f"Streaming scan failed: {str(e)}"
+            )
+        finally:
+            # Always cleanup container
+            if container_id:
+                await self.cleanup_container(container_id)
+
+
+# Global container manager instance
+container_manager = ContainerManager() 

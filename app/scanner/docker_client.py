@@ -1,9 +1,12 @@
 import requests
 import json
+import time
+import asyncio
+import structlog
 import http.client
 import socket
-from typing import Dict, Any, Optional
-import structlog
+from typing import Optional, Dict, Any, List
+from app.config import settings
 
 logger = structlog.get_logger()
 
@@ -87,7 +90,7 @@ class DockerClient:
                     'NetworkMode': 'none' if config.get('network_disabled', True) else 'bridge',
                     'ReadonlyRootfs': config.get('read_only', False),
                     'Tmpfs': config.get('tmpfs', {}),
-                    'AutoRemove': True,
+                    'AutoRemove': False,  # Disable auto-removal to capture logs
                     'Privileged': False,
                     'CapDrop': ['ALL'],
                     'SecurityOpt': ['no-new-privileges'],
@@ -188,7 +191,6 @@ class DockerClient:
         post-completion log retrieval might fail.
         """
         try:
-            import time
             import threading
             from queue import Queue
             

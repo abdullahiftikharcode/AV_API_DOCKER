@@ -7,7 +7,7 @@ import structlog
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
-from ..config import settings
+from app.config import settings
 from fastapi import HTTPException
 
 logger = structlog.get_logger()
@@ -111,7 +111,8 @@ class ContainerManager:
                 'network_disabled': False,  # Enable limited network access for MalwareBazaar API
                 'read_only': False,  # Allow writes for ClamAV logs
                 'tmpfs': {'/tmp': 'size=400m'},  # Temporary filesystem (increased for ClamAV databases)
-                'detach': False
+                'detach': False,
+                'auto_remove': False # Disable auto-removal to capture logs
             }
             
             # Log the container config for debugging
@@ -242,7 +243,8 @@ FILE_SIZE={len(file_content)}
                 'network_disabled': False,  # Enable limited network access for MalwareBazaar API
                 'read_only': False,  # Allow writes for ClamAV logs
                 'tmpfs': {'/tmp': 'size=400m'},  # Temporary filesystem (increased for ClamAV databases)
-                'detach': False
+                'detach': False,
+                'auto_remove': False # Disable auto-removal to capture logs
             }
             
             # Log the container config for debugging
@@ -278,6 +280,22 @@ FILE_SIZE={len(file_content)}
             logger.error("streaming_container_creation_failed", error=str(e), filename=filename)
             return None
     
+    async def cleanup_container(self, container_id: str) -> bool:
+        """Clean up a container after log capture."""
+        try:
+            client = self._get_docker_client()
+            # Remove the container
+            response = client._request('DELETE', f'/v1.41/containers/{container_id}?force=true')
+            if response.status_code == 204:
+                logger.info("container_cleaned_up", container_id=container_id)
+                return True
+            else:
+                logger.warning("container_cleanup_failed", container_id=container_id, status_code=response.status_code)
+                return False
+        except Exception as e:
+            logger.error("container_cleanup_error", container_id=container_id, error=str(e))
+            return False
+
     async def wait_for_container_completion(self, container_id: str, timeout: int) -> Dict[str, Any]:
         """Wait for container to complete and get results."""
         try:
@@ -334,11 +352,20 @@ FILE_SIZE={len(file_content)}
             else:
                 logger.error("all_log_capture_methods_failed", container_id=container_id)
             
-            # Parse result
-            exit_code = result.get('StatusCode', 1)
+            # Log the final result
+            logger.info("container_completed", 
+                       container_id=container_id, 
+                       exit_code=result.get('StatusCode', 1), 
+                       logs_length=len(logs))
             
-            logger.info("container_completed", container_id=container_id, exit_code=exit_code, logs_length=len(logs))
+            # Log the actual logs for debugging
             logger.info("container_logs", logs=logs)
+            
+            # Clean up the container after capturing logs
+            await self.cleanup_container(container_id)
+            
+            # Parse the result
+            exit_code = result.get('StatusCode', 1)
             
             if exit_code == 0:
                 # Parse JSON result from logs
@@ -459,20 +486,6 @@ FILE_SIZE={len(file_content)}
         except Exception as e:
             logger.error("capture_container_logs_during_execution_error", container_id=container_id, error=str(e))
             return ""
-    
-    async def cleanup_container(self, container_id: str):
-        """Clean up container and temporary files."""
-        try:
-            client = self._get_docker_client()
-            
-            # Force remove container if still running
-            if client.remove_container(container_id, force=True):
-                logger.info("container_cleaned", container_id=container_id)
-            else:
-                logger.warning("container_cleanup_failed", container_id=container_id)
-                
-        except Exception as e:
-            logger.error("container_cleanup_failed", container_id=container_id, error=str(e))
     
     async def scan_file_in_container(self, file_path: Path) -> ContainerScanResult:
         """Scan a file using a fresh container."""

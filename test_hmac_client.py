@@ -20,16 +20,18 @@ from typing import Optional
 class HMACClient:
     """Client for sending HMAC-authenticated requests to the virus scanner API."""
     
-    def __init__(self, base_url: str, secret_key: str):
+    def __init__(self, base_url: str, secret_key: str, timeout: int = 300):
         """
         Initialize the HMAC client.
         
         Args:
             base_url: Base URL of the API (e.g., "http://localhost:8080")
             secret_key: Secret key for HMAC signing
+            timeout: Request timeout in seconds (default: 300 seconds = 5 minutes)
         """
         self.base_url = base_url.rstrip('/')
         self.secret_key = secret_key
+        self.timeout = timeout
         
     def _create_signature(self, timestamp: str, method: str, path: str, body: str) -> str:
         """
@@ -121,14 +123,41 @@ class HMACClient:
             print(f"File: {file_path.name} ({file_path.stat().st_size} bytes)")
             print(f"Timestamp: {headers['X-Timestamp']}")
             print(f"Signature: {headers['X-Signature']}")
+            print(f"Timeout: {self.timeout} seconds")
+            print("Waiting for response...")
             
-            response = requests.post(url, files=files, headers=headers)
-            
-            return {
-                'status_code': response.status_code,
-                'headers': dict(response.headers),
-                'data': response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
-            }
+            try:
+                response = requests.post(
+                    url, 
+                    files=files, 
+                    headers=headers, 
+                    timeout=self.timeout,
+                    stream=True  # Stream response to avoid memory issues
+                )
+                
+                print(f"Response received! Status: {response.status_code}")
+                
+                # Read response content
+                if response.headers.get('content-type', '').startswith('application/json'):
+                    try:
+                        data = response.json()
+                    except json.JSONDecodeError:
+                        data = response.text
+                else:
+                    data = response.text
+                
+                return {
+                    'status_code': response.status_code,
+                    'headers': dict(response.headers),
+                    'data': data
+                }
+                
+            except requests.exceptions.Timeout:
+                print(f"Request timed out after {self.timeout} seconds")
+                raise requests.exceptions.Timeout(f"Request timed out after {self.timeout} seconds")
+            except requests.exceptions.RequestException as e:
+                print(f"Request failed: {e}")
+                raise
     
     def health_check(self) -> dict:
         """
@@ -138,13 +167,23 @@ class HMACClient:
             dict: API response
         """
         url = f"{self.base_url}/health"
-        response = requests.get(url)
+        print(f"Performing health check to: {url}")
         
-        return {
-            'status_code': response.status_code,
-            'headers': dict(response.headers),
-            'data': response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
-        }
+        try:
+            response = requests.get(url, timeout=30)  # 30 second timeout for health check
+            print(f"Health check response received! Status: {response.status_code}")
+            
+            return {
+                'status_code': response.status_code,
+                'headers': dict(response.headers),
+                'data': response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
+            }
+        except requests.exceptions.Timeout:
+            print("Health check timed out after 30 seconds")
+            raise requests.exceptions.Timeout("Health check timed out after 30 seconds")
+        except requests.exceptions.RequestException as e:
+            print(f"Health check failed: {e}")
+            raise
     
     def send_json_request(self, method: str, path: str, data: dict = None) -> dict:
         """
@@ -172,29 +211,47 @@ class HMACClient:
         print(f"Body: {body}")
         print(f"Timestamp: {headers['X-Timestamp']}")
         print(f"Signature: {headers['X-Signature']}")
+        print(f"Timeout: {self.timeout} seconds")
+        print("Waiting for response...")
         
-        response = requests.request(method, url, data=body, headers=headers)
-        
-        return {
-            'status_code': response.status_code,
-            'headers': dict(response.headers),
-            'data': response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
-        }
+        try:
+            response = requests.request(
+                method, 
+                url, 
+                data=body, 
+                headers=headers, 
+                timeout=self.timeout
+            )
+            
+            print(f"Response received! Status: {response.status_code}")
+            
+            return {
+                'status_code': response.status_code,
+                'headers': dict(response.headers),
+                'data': response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
+            }
+        except requests.exceptions.Timeout:
+            print(f"Request timed out after {self.timeout} seconds")
+            raise requests.exceptions.Timeout(f"Request timed out after {self.timeout} seconds")
+        except requests.exceptions.RequestException as e:
+            print(f"Request failed: {e}")
+            raise
 
 
 def main():
     """Main function to run the test client."""
     parser = argparse.ArgumentParser(description="Test HMAC-authenticated virus scanner API")
     parser.add_argument("--url", default="http://localhost:8080", help="API base URL")
-    parser.add_argument("--secret", default="my-super-secret-hmac-key-2024", help="HMAC secret key")
+    parser.add_argument("--secret", default="8e0a9393b877bc3bf1a1debe018716f0c5830615da9a13bef482515d52f1a2f2", help="HMAC secret key")
     parser.add_argument("--file", help="File to scan")
     parser.add_argument("--health", action="store_true", help="Perform health check")
     parser.add_argument("--test-json", action="store_true", help="Test JSON endpoint")
+    parser.add_argument("--timeout", type=int, default=300, help="Request timeout in seconds (default: 300)")
     
     args = parser.parse_args()
     
     # Initialize client
-    client = HMACClient(args.url, args.secret)
+    client = HMACClient(args.url, args.secret, args.timeout)
     
     try:
         if args.health:
@@ -220,6 +277,14 @@ def main():
             print("Please specify an action: --file, --health, or --test-json")
             print("Use --help for more information")
             
+    except requests.exceptions.Timeout as e:
+        print(f"Timeout Error: {e}")
+        print("The server took too long to respond. This could indicate:")
+        print("- The server is overloaded")
+        print("- The file scan is taking longer than expected")
+        print("- There's a network issue")
+        print(f"Try increasing the timeout with --timeout <seconds> (current: {args.timeout}s)")
+        sys.exit(1)
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)

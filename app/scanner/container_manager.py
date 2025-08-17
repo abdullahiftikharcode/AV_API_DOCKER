@@ -315,16 +315,24 @@ FILE_SIZE={len(file_content)}
                     if not logs.strip():
                         # Try with different log format
                         import subprocess
-                        result = subprocess.run(
+                        subprocess_result = subprocess.run(
                             ['docker', 'logs', container_id], 
                             capture_output=True, 
                             text=True, 
                             timeout=10
                         )
-                        if result.returncode == 0:
-                            logs = result.stdout + result.stderr
+                        if subprocess_result.returncode == 0:
+                            logs = subprocess_result.stdout + subprocess_result.stderr
+                        else:
+                            logger.warning("docker_logs_subprocess_failed", container_id=container_id, returncode=subprocess_result.returncode, stderr=subprocess_result.stderr)
                 except Exception as e:
                     logger.error("final_log_fallback_failed", container_id=container_id, error=str(e))
+            
+            # Log the final result of log capture attempts
+            if logs.strip():
+                logger.info("logs_captured_successfully", container_id=container_id, logs_length=len(logs), method="multi_fallback")
+            else:
+                logger.error("all_log_capture_methods_failed", container_id=container_id)
             
             # Parse result
             exit_code = result.get('StatusCode', 1)

@@ -90,7 +90,7 @@ class DockerClient:
                     'NetworkMode': 'none' if config.get('network_disabled', True) else 'bridge',
                     'ReadonlyRootfs': config.get('read_only', False),
                     'Tmpfs': config.get('tmpfs', {}),
-                    'AutoRemove': False,  # Disable auto-removal to capture logs
+                    'AutoRemove': config.get('AutoRemove', False),  # Use passed config or default to False
                     'Privileged': False,
                     'CapDrop': ['ALL'],
                     'SecurityOpt': ['no-new-privileges'],

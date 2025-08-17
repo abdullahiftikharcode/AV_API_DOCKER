@@ -361,6 +361,23 @@ FILE_SIZE={len(file_content)}
             # Log the actual logs for debugging
             logger.info("container_logs", logs=logs)
             
+            # Additional debugging: Show the last few lines of logs
+            if logs.strip():
+                lines = logs.strip().split('\n')
+                last_lines = lines[-10:] if len(lines) > 10 else lines
+                logger.info("last_lines_of_logs", last_lines=last_lines)
+                
+                # Look for any lines that might contain JSON
+                json_candidates = []
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('{') and line.strip().endswith('}'):
+                        json_candidates.append(f"Line {i+1}: {line.strip()}")
+                
+                if json_candidates:
+                    logger.info("json_candidates_found", candidates=json_candidates)
+                else:
+                    logger.warning("no_json_candidates_found")
+            
             # Clean up the container after capturing logs
             await self.cleanup_container(container_id)
             
@@ -375,45 +392,86 @@ FILE_SIZE={len(file_content)}
                     lines = logs.strip().split('\n')
                     logger.info("parsing_logs", lines_count=len(lines))
                     
-                    # Try to find JSON in the logs (reverse order first for latest result)
-                    import re
+                    # First, try to find the last valid JSON line (most likely the scan result)
+                    json_result = None
                     
+                    # Look for JSON in reverse order (latest results first)
                     for line in reversed(lines):
-                        # Look for JSON pattern in the line, handling unicode control characters
-                        json_match = re.search(r'\{.*\}', line)
-                        if json_match:
+                        line = line.strip()
+                        if not line:
+                            continue
+                            
+                        # Skip debug lines and non-JSON content
+                        if line.startswith('DEBUG:') or line.startswith('ERROR:') or line.startswith('INFO:'):
+                            continue
+                            
+                        # Look for JSON pattern - be more specific
+                        if line.startswith('{') and line.endswith('}'):
                             try:
-                                json_str = json_match.group(0)
-                                result_data = json.loads(json_str)
-                                logger.info("json_found", result_data=result_data)
-                                return {
-                                    'success': True,
-                                    'result': result_data,
-                                    'logs': logs
-                                }
+                                # Clean the line of any control characters
+                                clean_line = ''.join(char for char in line if ord(char) >= 32 or char in '\n\r\t')
+                                result_data = json.loads(clean_line)
+                                
+                                # Validate this looks like a scan result
+                                if isinstance(result_data, dict) and 'safe' in result_data:
+                                    json_result = result_data
+                                    logger.info("json_found_reverse", result_data=result_data)
+                                    break
                             except json.JSONDecodeError:
                                 continue
                     
-                    # If no JSON found in reversed lines, try all lines
-                    for line in lines:
-                        json_match = re.search(r'\{.*\}', line)
-                        if json_match:
+                    # If no valid JSON found in reverse, try forward search
+                    if not json_result:
+                        for line in lines:
+                            line = line.strip()
+                            if not line:
+                                continue
+                                
+                            # Skip debug lines
+                            if line.startswith('DEBUG:') or line.startswith('ERROR:') or line.startswith('INFO:'):
+                                continue
+                                
+                            # Look for JSON pattern
+                            if line.startswith('{') and line.endswith('}'):
+                                try:
+                                    # Clean the line of any control characters
+                                    clean_line = ''.join(char for char in line if ord(char) >= 32 or char in '\n\r\t')
+                                    result_data = json.loads(clean_line)
+                                    
+                                    # Validate this looks like a scan result
+                                    if isinstance(result_data, dict) and 'safe' in result_data:
+                                        json_result = result_data
+                                        logger.info("json_found_forward", result_data=result_data)
+                                        break
+                                except json.JSONDecodeError:
+                                    continue
+                    
+                    # If still no result, try to find any JSON in the logs
+                    if not json_result:
+                        # Look for JSON pattern anywhere in the logs
+                        import re
+                        json_matches = re.findall(r'\{[^{}]*\}', logs)
+                        for match in reversed(json_matches):
                             try:
-                                json_str = json_match.group(0)
-                                result_data = json.loads(json_str)
-                                logger.info("json_found_forward", result_data=result_data)
-                                return {
-                                    'success': True,
-                                    'result': result_data,
-                                    'logs': logs
-                                }
+                                result_data = json.loads(match)
+                                if isinstance(result_data, dict) and 'safe' in result_data:
+                                    json_result = result_data
+                                    logger.info("json_found_regex", result_data=result_data)
+                                    break
                             except json.JSONDecodeError:
                                 continue
                     
-                    logger.error("no_json_found", logs=logs)
+                    if json_result:
+                        return {
+                            'success': True,
+                            'result': json_result,
+                            'logs': logs
+                        }
+                    
+                    logger.error("no_valid_json_found", logs=logs[:1000])  # Log first 1000 chars for debugging
                     return {
                         'success': False,
-                        'error': 'No JSON result found in logs',
+                        'error': 'No valid JSON scan result found in logs',
                         'logs': logs
                     }
                 except json.JSONDecodeError as e:

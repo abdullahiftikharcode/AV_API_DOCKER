@@ -112,7 +112,7 @@ class ContainerManager:
                 'read_only': False,  # Allow writes for ClamAV logs
                 'tmpfs': {'/tmp': 'size=400m'},  # Temporary filesystem (increased for ClamAV databases)
                 'detach': False,
-                'auto_remove': False # Disable auto-removal to capture logs
+                'AutoRemove': False, # Disable auto-removal to capture logs
             }
             
             # Log the container config for debugging
@@ -244,7 +244,7 @@ FILE_SIZE={len(file_content)}
                 'read_only': False,  # Allow writes for ClamAV logs
                 'tmpfs': {'/tmp': 'size=400m'},  # Temporary filesystem (increased for ClamAV databases)
                 'detach': False,
-                'auto_remove': False # Disable auto-removal to capture logs
+                'AutoRemove': False, # Disable auto-removal to capture logs
             }
             
             # Log the container config for debugging

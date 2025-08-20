@@ -154,16 +154,16 @@ class SectionInfo(FeatureType):
                 imagebase = lief_binary.optional_header.imagebase
             
             section = lief_binary.section_from_rva(lief_binary.entrypoint - imagebase)
-                if section is None:
+            if section is None:
                 raise ValueError("Section not found")
-                entry_section = section.name
+            entry_section = section.name
         except (ValueError, AttributeError, Exception):
-                # bad entry point, let's find the first executable section
-                entry_section = ""
-                for s in lief_binary.sections:
-                    if lief.PE.SECTION_CHARACTERISTICS.MEM_EXECUTE in s.characteristics_lists:
-                        entry_section = s.name
-                        break
+            # bad entry point, let's find the first executable section
+            entry_section = ""
+            for s in lief_binary.sections:
+                if lief.PE.SECTION_CHARACTERISTICS.MEM_EXECUTE in s.characteristics_lists:
+                    entry_section = s.name
+                    break
 
         raw_obj = {"entry": entry_section}
         raw_obj["sections"] = [{

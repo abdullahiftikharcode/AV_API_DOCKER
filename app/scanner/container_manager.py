@@ -115,8 +115,8 @@ class ContainerManager:
                 'AutoRemove': False, # Disable auto-removal to capture logs
             }
             
-            # Log the container config for debugging
-            logger.info("creating_container_with_config", config=container_config)
+            # Log container creation (without sensitive config details)
+            logger.info("creating_container", container_id="pending", image=self.container_image)
             
             container_id = client.create_container(container_config)
             if not container_id:
@@ -247,8 +247,8 @@ FILE_SIZE={len(file_content)}
                 'AutoRemove': False, # Disable auto-removal to capture logs
             }
             
-            # Log the container config for debugging
-            logger.info("creating_streaming_container_with_config", config=container_config)
+            # Log streaming container creation (without sensitive config details)
+            logger.info("creating_streaming_container", container_id="pending", image=self.container_image)
             
             container_id = client.create_container(container_config)
             if not container_id:
@@ -295,7 +295,7 @@ FILE_SIZE={len(file_content)}
         except Exception as e:
             logger.error("container_cleanup_error", container_id=container_id, error=str(e))
             return False
-
+    
     async def wait_for_container_completion(self, container_id: str, timeout: int) -> Dict[str, Any]:
         """Wait for container to complete and get results."""
         try:
@@ -317,7 +317,7 @@ FILE_SIZE={len(file_content)}
             # If streaming failed, fallback to regular method
             if not logs.strip():
                 logger.warning("streaming_logs_failed_fallback", container_id=container_id)
-                logs = await client.get_container_logs_async(container_id) or ''
+            logs = await client.get_container_logs_async(container_id) or ''
             
             # If still no logs, try capturing during execution as final fallback
             if not logs.strip():
@@ -496,7 +496,7 @@ FILE_SIZE={len(file_content)}
                 'error': f'Container wait failed: {str(e)}',
                 'logs': ''
             }
-
+    
     async def capture_container_logs_during_execution(self, container_id: str, timeout: int) -> str:
         """
         Capture container logs during execution, not just after completion.
@@ -540,7 +540,7 @@ FILE_SIZE={len(file_content)}
                         logs_buffer.append(line)
             
             return '\n'.join(logs_buffer)
-            
+                
         except Exception as e:
             logger.error("capture_container_logs_during_execution_error", container_id=container_id, error=str(e))
             return ""
@@ -770,6 +770,224 @@ FILE_SIZE={len(file_content)}
                 file_name=upload_file.filename,
                 scan_engine="container_ensemble",
                 error=f"Streaming scan failed: {str(e)}"
+            )
+        finally:
+            # Always cleanup container
+            if container_id:
+                await self.cleanup_container(container_id)
+
+
+    async def execute_python_code(self, python_code: str, timeout: int = 300) -> ContainerScanResult:
+        """
+        Execute Python code by piping it into a container without storing the source code.
+        
+        Args:
+            python_code: Python source code as string
+            timeout: Execution timeout in seconds
+            
+        Returns:
+            ContainerScanResult with execution results
+        """
+        start_time = time.time()
+        container_id = None
+        
+        try:
+            # Create container for Python execution
+            client = self._get_docker_client()
+            
+            container_config = {
+                'image': self.container_image,
+                'command': ['/bin/bash'],  # Just start bash, we'll execute commands via exec
+                'volumes': {
+                    str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'}
+                },
+                'environment': {
+                    'MAX_FILE_SIZE_MB': str(settings.MAX_FILE_SIZE_MB),
+                    'SCAN_TIMEOUT_SECONDS': str(settings.SCAN_TIMEOUT_SECONDS),
+                    'ML_ENABLE_PE_ANALYSIS': str(settings.ML_ENABLE_PE_ANALYSIS),
+                    'ML_ENABLE_ENTROPY_ANALYSIS': str(settings.ML_ENABLE_ENTROPY_ANALYSIS),
+                    'SCAN_TIMEOUT': str(timeout),
+                    'SCAN_MODE': 'python_execution',
+                    # Pass through HMAC configuration
+                    'HMAC_SECRET_KEY': os.environ.get('HMAC_SECRET_KEY', ''),
+                    'HMAC_ENABLED': str(settings.HMAC_ENABLED),
+                    'HMAC_TIMESTAMP_TOLERANCE_SECONDS': str(settings.HMAC_TIMESTAMP_TOLERANCE_SECONDS),
+                    # Pass through other configurations
+                    'MALWAREBazaar_API_KEY': os.environ.get('MALWAREBazaar_API_KEY', ''),
+                    'MALWAREBazaar_API_KEY_BACKUP': os.environ.get('MALWAREBazaar_API_KEY_BACKUP', ''),
+                    'MALWAREBazaar_ENABLED': str(settings.MALWAREBazaar_ENABLED),
+                    'MALWAREBazaar_TIMEOUT': str(settings.MALWAREBazaar_TIMEOUT),
+                    'BYTESCALE_API_KEY': os.environ.get('BYTESCALE_API_KEY', ''),
+                    'BYTESCALE_ACCOUNT_ID': os.environ.get('BYTESCALE_ACCOUNT_ID', ''),
+                    'BYTESCALE_ENABLED': str(settings.BYTESCALE_ENABLED),
+                    'BYTESCALE_TIMEOUT': str(settings.BYTESCALE_TIMEOUT)
+                },
+                'mem_limit': self.max_memory,
+                'cpu_period': 100000,
+                'cpu_quota': int(float(self.max_cpu) * 100000),
+                'network_disabled': False,
+                'read_only': False,
+                'tmpfs': {'/tmp': 'size=400m'},
+                'detach': False,
+                'AutoRemove': False,
+                'stdin_open': True,  # Enable stdin for piping
+                'tty': False
+            }
+            
+            # Create and start container
+            container_id = client.create_container(container_config)
+            if not container_id:
+                logger.error("python_execution_container_creation_failed")
+                return ContainerScanResult(
+                    safe=True,
+                    threats=[],
+                    scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    scan_duration_ms=0,
+                    container_duration_ms=0,
+                    file_size=len(python_code.encode()),
+                    file_name='python_script.py',
+                    scan_engine="container_ensemble",
+                    error="Failed to create Python execution container"
+                )
+            
+            if not client.start_container(container_id):
+                logger.error("python_execution_container_start_failed", container_id=container_id)
+                client.remove_container(container_id, force=True)
+                return ContainerScanResult(
+                    safe=True,
+                    threats=[],
+                    scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    scan_duration_ms=0,
+                    container_duration_ms=0,
+                    file_size=len(python_code.encode()),
+                    file_name='python_script.py',
+                    scan_engine="container_ensemble",
+                    error="Failed to start Python execution container"
+                )
+            
+            # Step 1: Write Python code to temporary file using put_archive
+            logger.info("writing_python_code_to_container", container_id=container_id, code_length=len(python_code))
+            
+            # Create a tar archive with the Python code
+            import tarfile
+            import io
+            
+            tar_buffer = io.BytesIO()
+            with tarfile.open(fileobj=tar_buffer, mode='w') as tar:
+                # Create tarinfo for the Python script
+                tarinfo = tarfile.TarInfo(name='script.py')
+                tarinfo.size = len(python_code.encode())
+                tarinfo.mode = 0o644
+                
+                # Add the Python code to the tar
+                tar.addfile(tarinfo, io.BytesIO(python_code.encode()))
+            
+            # Copy the tar archive to the container's /tmp directory
+            tar_buffer.seek(0)
+            if not client.put_archive(container_id, '/tmp', tar_buffer.getvalue()):
+                logger.error("failed_to_write_python_code", container_id=container_id)
+                return ContainerScanResult(
+                    safe=True,
+                    threats=[],
+                    scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    scan_duration_ms=0,
+                    container_duration_ms=int((time.time() - start_time) * 1000),
+                    file_size=len(python_code.encode()),
+                    file_name='python_script.py',
+                    scan_engine="container_ensemble",
+                    error="Failed to write Python code to container using put_archive"
+                )
+            
+            # Step 2: Execute the Python script
+            logger.info("executing_python_script", container_id=container_id)
+            exec_result = client.exec_in_container(
+                container_id, 
+                ['/bin/bash', '-c', 'python /tmp/script.py']
+            )
+            
+            if not exec_result:
+                logger.error("python_execution_failed", container_id=container_id, error="No execution result")
+                return ContainerScanResult(
+                    safe=True,
+                    threats=[],
+                    scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    scan_duration_ms=0,
+                    container_duration_ms=int((time.time() - start_time) * 1000),
+                    file_size=len(python_code.encode()),
+                    file_name='python_script.py',
+                    scan_engine="container_ensemble",
+                    error="Python execution failed: No execution result"
+                )
+            
+            # Step 3: Clean up the temporary file
+            logger.info("cleaning_up_temporary_file", container_id=container_id)
+            cleanup_result = client.exec_in_container(
+                container_id, 
+                ['/bin/bash', '-c', 'rm -f /tmp/script.py && echo "File cleaned up"']
+            )
+            
+            if not cleanup_result or cleanup_result.get('ExitCode', 1) != 0:
+                logger.warning("failed_to_cleanup_temp_file", container_id=container_id, 
+                             exit_code=cleanup_result.get('ExitCode', 'unknown') if cleanup_result else 'unknown')
+            else:
+                logger.info("temporary_file_cleaned_up_successfully", container_id=container_id)
+            
+            # Get execution output
+            stdout = exec_result.get('stdout', '')
+            stderr = exec_result.get('stderr', '')
+            exit_code = exec_result.get('ExitCode', 1)
+            
+            # Analyze the output for potential threats
+            threats = []
+            if stderr:
+                threats.append(f"Python execution warnings/errors: {stderr}")
+            
+            if exit_code != 0:
+                threats.append(f"Python execution failed with exit code {exit_code}")
+            
+            # Check if code contains suspicious patterns
+            suspicious_patterns = ['import os', 'import subprocess', 'import sys', 'eval(', 'exec(', '__import__']
+            for pattern in suspicious_patterns:
+                if pattern in python_code:
+                    threats.append(f"Suspicious Python pattern detected: {pattern}")
+            
+            # Determine if execution was safe
+            is_safe = len(threats) == 0 and exit_code == 0
+            
+            execution_duration_ms = int((time.time() - start_time) * 1000)
+            
+            logger.info("python_execution_completed", container_id=container_id, 
+                       safe=is_safe, threats_count=len(threats), exit_code=exit_code)
+            
+            return ContainerScanResult(
+                safe=is_safe,
+                threats=threats,
+                scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                scan_duration_ms=execution_duration_ms,
+                container_duration_ms=execution_duration_ms,
+                file_size=len(python_code.encode()),
+                file_name='python_script.py',
+                scan_engine="container_ensemble",
+                details={
+                    'stdout': stdout,
+                    'stderr': stderr,
+                    'execution_successful': exit_code == 0,
+                    'exit_code': exit_code
+                }
+            )
+            
+        except Exception as e:
+            logger.error("python_execution_failed", error=str(e))
+            return ContainerScanResult(
+                safe=True,
+                threats=[],
+                scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                scan_duration_ms=0,
+                container_duration_ms=int((time.time() - start_time) * 1000),
+                file_size=len(python_code.encode()) if python_code else 0,
+                file_name='python_script.py',
+                scan_engine="container_ensemble",
+                error=f"Python execution failed: {str(e)}"
             )
         finally:
             # Always cleanup container

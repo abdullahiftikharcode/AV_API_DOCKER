@@ -75,7 +75,7 @@ class DockerClient:
 
     def create_container(self, config: Dict[str, Any]) -> Optional[str]:
         try:
-            logger.info("docker_create_container", config=config)
+            logger.info("docker_create_container", image=config.get('image'), command=config.get('command', []))
             
             # Use simpler Docker API structure that matches working pattern
             container_config = {
@@ -114,7 +114,7 @@ class DockerClient:
             container_config = {k: v for k, v in container_config.items() if v is not None and v != []}
             container_config['HostConfig'] = {k: v for k, v in container_config['HostConfig'].items() if v is not None and v != []}
             
-            logger.info("docker_create_container_final_config", config=container_config)
+            logger.info("docker_create_container_final_config", image=container_config.get('Image'), command=container_config.get('Cmd', []))
             
             response = self._request(
                 'POST',
@@ -328,15 +328,16 @@ class DockerClient:
             logger.error("container_wait_error", container_id=container_id, error=str(e))
             return None
 
-    def exec_in_container(self, container_id: str, cmd: list, detach: bool = False) -> Optional[Dict[str, Any]]:
+    def exec_in_container(self, container_id: str, cmd: list, detach: bool = False, input_data: bytes = None) -> Optional[Dict[str, Any]]:
         try:
             # Create exec instance
             exec_config = {
                 'Cmd': cmd,
                 'AttachStdout': not detach,
-                'AttachStderr': not detach
+                'AttachStderr': not detach,
+                'AttachStdin': input_data is not None
             }
-            logger.info("exec_in_container_creating", container_id=container_id, cmd=cmd)
+            logger.info("exec_in_container_creating", container_id=container_id, cmd=cmd, has_input=input_data is not None)
             response = self._request(
                 'POST',
                 f'/v1.41/containers/{container_id}/exec',
@@ -350,18 +351,49 @@ class DockerClient:
             exec_id = response.json()['Id']
             logger.info("exec_in_container_created", container_id=container_id, exec_id=exec_id)
 
-            # Start exec instance
-            response = self._request(
-                'POST',
-                f'/v1.41/exec/{exec_id}/start',
-                headers={'Content-Type': 'application/json'},
-                data=json.dumps({'Detach': detach})
-            )
-            logger.info("exec_in_container_start_response", container_id=container_id, exec_id=exec_id, status_code=response.status_code)
-            if response.status_code != 200:
-                logger.error("exec_in_container_start_failed", container_id=container_id, exec_id=exec_id, status_code=response.status_code)
-                return None
+            # Start exec instance with input data if provided
+            start_data = {'Detach': detach}
+            if input_data:
+                start_data['Tty'] = False
+                start_data['Privileged'] = False
+                
+                # Start the exec instance
+                response = self._request(
+                    'POST',
+                    f'/v1.41/exec/{exec_id}/start',
+                    headers={'Content-Type': 'application/json'},
+                    data=json.dumps(start_data)
+                )
+                
+                if response.status_code == 200:
+                    # Send input data to the exec instance via stdin
+                    # Note: Docker exec API doesn't support direct stdin piping in the way we need
+                    # We'll use a different approach - write to a temporary file first
+                    logger.warning("input_data_piping_not_supported", container_id=container_id, 
+                                 exec_id=exec_id, data_size=len(input_data))
+                    # For now, we'll return None to indicate input data isn't supported
+                    # The container_manager will handle this by using put_archive instead
+                    return None
+                else:
+                    logger.error("exec_in_container_start_failed", container_id=container_id, exec_id=exec_id, status_code=response.status_code)
+                    return None
+            else:
+                # Start exec instance without input
+                response = self._request(
+                    'POST',
+                    f'/v1.41/exec/{exec_id}/start',
+                    headers={'Content-Type': 'application/json'},
+                    data=json.dumps(start_data)
+                )
+                logger.info("exec_in_container_start_response", container_id=container_id, exec_id=exec_id, status_code=response.status_code)
+                if response.status_code != 200:
+                    logger.error("exec_in_container_start_failed", container_id=container_id, exec_id=exec_id, status_code=response.status_code)
+                    return None
 
+            # Wait a bit for execution to complete
+            import time
+            time.sleep(1)
+            
             # Get exec result
             response = self._request('GET', f'/v1.41/exec/{exec_id}/json')
             logger.info("exec_in_container_result_response", container_id=container_id, exec_id=exec_id, status_code=response.status_code)

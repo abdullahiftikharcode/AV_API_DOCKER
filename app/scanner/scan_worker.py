@@ -194,6 +194,23 @@ async def main():
         # Output JSON result
         print(json.dumps(response))
         
+        # IMMEDIATE CLEANUP: Remove scanned files from container memory
+        try:
+            if file_path and file_path.exists():
+                # Remove the scanned file immediately after processing
+                file_path.unlink()
+                print(f"DEBUG: Scanned file {file_path} removed from container memory")
+                
+                # Also clean up any other files in /scan directory
+                scan_dir = Path('/scan')
+                if scan_dir.exists():
+                    for remaining_file in scan_dir.iterdir():
+                        if remaining_file.is_file():
+                            remaining_file.unlink()
+                            print(f"DEBUG: Cleaned up remaining file: {remaining_file}")
+        except Exception as cleanup_error:
+            print(f"WARNING: File cleanup failed: {cleanup_error}")
+        
     except Exception as e:
         # Error response
         container_duration_ms = int((time.time() - container_start_time) * 1000) if container_start_time else 0
@@ -209,6 +226,24 @@ async def main():
             'error': str(e)
         }
         print(json.dumps(error_response))
+        
+        # IMMEDIATE CLEANUP: Remove scanned files even on error
+        try:
+            if file_path and file_path.exists():
+                # Remove the scanned file immediately after processing
+                file_path.unlink()
+                print(f"DEBUG: Scanned file {file_path} removed from container memory (error case)")
+                
+                # Also clean up any other files in /scan directory
+                scan_dir = Path('/scan')
+                if scan_dir.exists():
+                    for remaining_file in scan_dir.iterdir():
+                        if remaining_file.is_file():
+                            remaining_file.unlink()
+                            print(f"DEBUG: Cleaned up remaining file: {remaining_file}")
+        except Exception as cleanup_error:
+            print(f"WARNING: File cleanup failed: {cleanup_error}")
+        
         print(f"ERROR: {str(e)}", file=sys.stderr)
         sys.exit(1)
 

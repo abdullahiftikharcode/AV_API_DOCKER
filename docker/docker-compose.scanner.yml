@@ -14,8 +14,8 @@ services:
       - SCAN_TIMEOUT_SECONDS=300
       - TEMP_DIR=/tmp/virus-scanner
       - LOG_LEVEL=INFO
-      - MAX_CONCURRENT_SCANS=2
-      - MEMORY_LIMIT_MB=4000
+      - MAX_CONCURRENT_SCANS=6
+      - MEMORY_LIMIT_MB=2000
       - ENABLE_RESULT_CACHING=true
       - CACHE_TTL_HOURS=24
     volumes:

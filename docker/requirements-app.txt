@@ -4,7 +4,7 @@ python-multipart==0.0.6
 pydantic==2.5.3
 pydantic-settings==2.1.0
 python-dotenv==1.0.0
-clamd==1.0.2
+# clamd==1.0.2  # Removed - using direct clamscan command instead
 yara-python==4.5.0
 aiofiles==23.2.1
 python-magic==0.4.27

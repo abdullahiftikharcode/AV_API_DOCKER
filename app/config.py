@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     # Memory Management
-    MAX_CONCURRENT_SCANS: int = 2
-    MEMORY_LIMIT_MB: int = 4000  # Reduced per container for concurrent operation
+    MAX_CONCURRENT_SCANS: int = 6
+    MEMORY_LIMIT_MB: int = 2000  # Reduced per container for concurrent operation
     ENABLE_RESULT_CACHING: bool = True
     CACHE_TTL_HOURS: int = 24
 

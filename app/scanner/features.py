@@ -379,32 +379,32 @@ class HeaderFileInfo(FeatureType):
 
         # Updated for LIEF >= 0.13.0: Handle header access properly
         try:
-        raw_obj['coff']['timestamp'] = lief_binary.header.time_date_stamps
-        raw_obj['coff']['machine'] = str(lief_binary.header.machine).split('.')[-1]
-        raw_obj['coff']['characteristics'] = [str(c).split('.')[-1] for c in lief_binary.header.characteristics_list]
+            raw_obj['coff']['timestamp'] = lief_binary.header.time_date_stamps
+            raw_obj['coff']['machine'] = str(lief_binary.header.machine).split('.')[-1]
+            raw_obj['coff']['characteristics'] = [str(c).split('.')[-1] for c in lief_binary.header.characteristics_list]
         except AttributeError:
             # Handle case where header structure might be different
             pass
         
         try:
-        raw_obj['optional']['subsystem'] = str(lief_binary.optional_header.subsystem).split('.')[-1]
-        raw_obj['optional']['dll_characteristics'] = [
-            str(c).split('.')[-1] for c in lief_binary.optional_header.dll_characteristics_lists
-        ]
-        raw_obj['optional']['magic'] = str(lief_binary.optional_header.magic).split('.')[-1]
-        raw_obj['optional']['major_image_version'] = lief_binary.optional_header.major_image_version
-        raw_obj['optional']['minor_image_version'] = lief_binary.optional_header.minor_image_version
-        raw_obj['optional']['major_linker_version'] = lief_binary.optional_header.major_linker_version
-        raw_obj['optional']['minor_linker_version'] = lief_binary.optional_header.minor_linker_version
-        raw_obj['optional'][
-            'major_operating_system_version'] = lief_binary.optional_header.major_operating_system_version
-        raw_obj['optional'][
-            'minor_operating_system_version'] = lief_binary.optional_header.minor_operating_system_version
-        raw_obj['optional']['major_subsystem_version'] = lief_binary.optional_header.major_subsystem_version
-        raw_obj['optional']['minor_subsystem_version'] = lief_binary.optional_header.minor_subsystem_version
-        raw_obj['optional']['sizeof_code'] = lief_binary.optional_header.sizeof_code
-        raw_obj['optional']['sizeof_headers'] = lief_binary.optional_header.sizeof_headers
-        raw_obj['optional']['sizeof_heap_commit'] = lief_binary.optional_header.sizeof_heap_commit
+            raw_obj['optional']['subsystem'] = str(lief_binary.optional_header.subsystem).split('.')[-1]
+            raw_obj['optional']['dll_characteristics'] = [
+                str(c).split('.')[-1] for c in lief_binary.optional_header.dll_characteristics_lists
+            ]
+            raw_obj['optional']['magic'] = str(lief_binary.optional_header.magic).split('.')[-1]
+            raw_obj['optional']['major_image_version'] = lief_binary.optional_header.major_image_version
+            raw_obj['optional']['minor_image_version'] = lief_binary.optional_header.minor_image_version
+            raw_obj['optional']['major_linker_version'] = lief_binary.optional_header.major_linker_version
+            raw_obj['optional']['minor_linker_version'] = lief_binary.optional_header.minor_linker_version
+            raw_obj['optional'][
+                'major_operating_system_version'] = lief_binary.optional_header.major_operating_system_version
+            raw_obj['optional'][
+                'minor_operating_system_version'] = lief_binary.optional_header.minor_operating_system_version
+            raw_obj['optional']['major_subsystem_version'] = lief_binary.optional_header.major_subsystem_version
+            raw_obj['optional']['minor_subsystem_version'] = lief_binary.optional_header.minor_subsystem_version
+            raw_obj['optional']['sizeof_code'] = lief_binary.optional_header.sizeof_code
+            raw_obj['optional']['sizeof_headers'] = lief_binary.optional_header.sizeof_headers
+            raw_obj['optional']['sizeof_heap_commit'] = lief_binary.optional_header.sizeof_heap_commit
         except AttributeError:
             # Handle case where optional_header structure might be different
             pass
@@ -514,12 +514,12 @@ class DataDirectories(FeatureType):
 
         # Updated for LIEF >= 0.13.0: Handle data directories access properly
         try:
-        for data_directory in lief_binary.data_directories:
-            output.append({
-                "name": str(data_directory.type).replace("DATA_DIRECTORY.", ""),
-                "size": data_directory.size,
-                "virtual_address": data_directory.rva
-            })
+            for data_directory in lief_binary.data_directories:
+                output.append({
+                    "name": str(data_directory.type).replace("DATA_DIRECTORY.", ""),
+                    "size": data_directory.size,
+                    "virtual_address": data_directory.rva
+                })
         except AttributeError:
             # Handle case where data_directories might be accessed differently
             pass

@@ -129,18 +129,24 @@ class MLDetector(BaseScanner):
                 self.initialized = True
                 return
             
-            # Load available models
-            model_files = list(models_dir.glob("*.pt"))
+            # Look specifically for ffnn_seed0.pt first, then fall back to any .pt file
+            target_model = models_dir / "ffnn_seed0.pt"
+            if target_model.exists():
+                model_path = target_model
+                print(f"Found target model: {model_path}")
+            else:
+                # Fall back to first available model
+                model_files = list(models_dir.glob("*.pt"))
+                
+                if not model_files:
+                    print("WARNING: No .pt model files found in ML models directory")
+                    self.initialized = True
+                    return
+                
+                print(f"Target model ffnn_seed0.pt not found. Found {len(model_files)} other model files: {[f.name for f in model_files]}")
+                model_path = model_files[0]
+                print(f"Loading fallback model: {model_path}")
             
-            if not model_files:
-                print("WARNING: No .pt model files found in ML models directory")
-                self.initialized = True
-                return
-            
-            print(f"Found {len(model_files)} model files: {[f.name for f in model_files]}")
-            
-            # Load the first available model
-            model_path = model_files[0]
             print(f"Loading model: {model_path}")
             
             # Initialize the model architecture
@@ -175,6 +181,9 @@ class MLDetector(BaseScanner):
             print(f"EMBER v2 feature dimension: {expected_dim}")
             if expected_dim != 2381:
                 print(f"WARNING: Expected 2381 features, got {expected_dim}")
+            
+            print(f"✅ MLDetector initialized with SINGLE model: {model_path.name}")
+            print(f"✅ This will significantly speed up scanning compared to using 5 models")
             
             self.initialized = True
             
@@ -240,7 +249,8 @@ class MLDetector(BaseScanner):
             features_tensor = torch.tensor(features, dtype=torch.float32).unsqueeze(0)
             features_tensor = features_tensor.to(self.device)
             
-            # Run inference
+            # Run inference with single model
+            print(f"DEBUG: Running inference with single ML model (ffnn_seed0.pt)")
             with torch.no_grad():
                 predictions = self.models['primary'](features_tensor)
             

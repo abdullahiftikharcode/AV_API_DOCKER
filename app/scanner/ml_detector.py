@@ -80,6 +80,38 @@ class MLDetector(BaseScanner):
         
         return file_extension in skip_extensions
 
+    def _get_human_readable_threats(self, entropy: float, file_path: Path) -> List[str]:
+        """Convert technical analysis to human-readable threat descriptions."""
+        threats = []
+        
+        # High entropy indicates obfuscated or encrypted content
+        if entropy > 7.5:
+            threats.append("Obfuscated")
+        
+        # Very high entropy suggests encryption or packing
+        if entropy > 7.8:
+            threats.append("Encrypted")
+        
+        # Check file extension for additional context
+        file_extension = file_path.suffix.lower()
+        
+        # Add context-specific threats
+        if file_extension in ['.exe', '.dll', '.sys']:
+            if entropy > 7.5:
+                threats.append("Suspicious Executable")
+        elif file_extension in ['.js', '.vbs', '.ps1']:
+            if entropy > 7.0:
+                threats.append("Suspicious Script")
+        elif file_extension in ['.doc', '.docx', '.pdf']:
+            if entropy > 7.2:
+                threats.append("Suspicious Document")
+        
+        # If no specific threats found but entropy is concerning
+        if not threats and entropy > 7.0:
+            threats.append("Unusual Content")
+        
+        return threats
+
     def _analyze_file(self, file_path: Path) -> Tuple[bool, float, List[str]]:
         """Analyze file using entropy-based detection (no ML models)."""
         try:
@@ -96,16 +128,30 @@ class MLDetector(BaseScanner):
             
             # Calculate file entropy
             entropy = self._calculate_entropy(data)
+            print(f"DEBUG: File entropy: {entropy:.3f}")
             
-            # Simple heuristic: very high entropy might indicate packed/encrypted content
-            # This is a basic fallback since EMBER models are removed
-            if entropy > 7.5:  # High entropy threshold
-                confidence = min(0.8, (entropy - 7.0) / 1.0)  # Scale to 0-0.8
-                threats = ["High entropy content (possibly packed/encrypted)"]
-                return True, confidence, threats
+            # Get human-readable threats
+            threats = self._get_human_readable_threats(entropy, file_path)
             
-            # File appears normal based on entropy
-            return False, 0.0, []
+            # Determine if file is suspicious based on entropy
+            is_threat = len(threats) > 0
+            
+            # Calculate confidence based on entropy level
+            if is_threat:
+                if entropy > 7.8:
+                    confidence = 0.9  # Very high confidence for encrypted content
+                elif entropy > 7.5:
+                    confidence = 0.7  # High confidence for obfuscated content
+                elif entropy > 7.0:
+                    confidence = 0.5  # Medium confidence for unusual content
+                else:
+                    confidence = 0.3  # Low confidence
+            else:
+                confidence = 0.0
+            
+            print(f"DEBUG: Analysis result - threat: {is_threat}, confidence: {confidence:.3f}, threats: {threats}")
+            
+            return is_threat, confidence, threats
             
         except Exception as e:
             print(f"Error in ML analysis: {e}")

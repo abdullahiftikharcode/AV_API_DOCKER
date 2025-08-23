@@ -356,10 +356,15 @@ class BytescaleScanner(BaseScanner):
             
             print(f"DEBUG: Final is_safe value: {is_safe}")
             print(f"DEBUG: Final threats: {threats}")
+            
+            # Convert to human-readable threats
+            human_threats = self._get_human_readable_threats(threats, details)
+            details['original_threats'] = threats  # Keep original for debugging
+            print(f"DEBUG: Human-readable threats: {human_threats}")
 
             return ScanResult(
                 safe=is_safe,
-                threats=threats,
+                threats=human_threats,
                 scan_time=datetime.utcnow(),
                 file_size=file_path.stat().st_size,
                 file_name=file_path.name,
@@ -381,3 +386,34 @@ class BytescaleScanner(BaseScanner):
                 error=f"Bytescale scan error: {str(e)}",
                 details={"skipped": True, "reason": "scan_error"}
             )
+
+    def _get_human_readable_threats(self, threats: list, details: dict) -> list:
+        """Convert Bytescale technical threat descriptions to human-readable keywords."""
+        human_threats = []
+        
+        for threat in threats:
+            threat_lower = threat.lower()
+            
+            if 'virus' in threat_lower:
+                human_threats.append('Virus')
+            elif 'infected' in threat_lower:
+                human_threats.append('Infected')
+            elif 'malware' in threat_lower:
+                human_threats.append('Malware')
+            elif 'unknown' in threat_lower:
+                human_threats.append('Suspicious')
+            else:
+                # Extract the main threat type from the description
+                if 'detected' in threat_lower:
+                    # Extract what was detected
+                    if ':' in threat:
+                        detected_part = threat.split(':', 1)[1].strip()
+                        if detected_part:
+                            human_threats.append(detected_part.split()[0].title())
+                    else:
+                        human_threats.append('Threat')
+                else:
+                    human_threats.append('Suspicious')
+        
+        # Remove duplicates and return
+        return list(set(human_threats)) if human_threats else []

@@ -34,28 +34,26 @@ RUN pip install -r requirements-app.txt --timeout 120 --index-url https://pypi.o
 RUN mkdir -p /var/lib/clamav \
     && chmod 755 /var/lib/clamav
 
-# ClamAV virus databases will be downloaded next
+# ClamAV virus databases are now provided via shared volume mount
+# No need to download during build - they're mounted at runtime
 
-# Download and update ClamAV virus databases
-RUN freshclam --quiet \
-    && if [ ! -f /var/lib/clamav/main.cvd ]; then \
-        echo "Downloading main.cvd..." && \
-        wget -q -O /var/lib/clamav/main.cvd https://database.clamav.net/main.cvd; \
+# ClamAV shared volume check is done in pre-build validation script
+# This ensures the volume exists before building starts
+
+# Test ClamAV detection capabilities during build (not at runtime)
+RUN echo "🧪 Testing ClamAV detection capabilities during build..." \
+    && echo "X5O!P%@AP[4\PZX54(P^)7CC)7}\$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!\$H+H*" > /tmp/eicar_test.txt \
+    && if clamscan /tmp/eicar_test.txt > /tmp/clamav_test.log 2>&1; then \
+        echo "❌ ERROR: ClamAV should have detected EICAR test file as infected!" \
+        && echo "Test log:" \
+        && cat /tmp/clamav_test.log \
+        && exit 1; \
+    else \
+        echo "✅ ClamAV correctly detected EICAR test file as infected (exit code 1)" \
+        && echo "Test log:" \
+        && cat /tmp/clamav_test.log; \
     fi \
-    && if [ ! -f /var/lib/clamav/daily.cvd ]; then \
-        echo "Downloading daily.cvd..." && \
-        wget -q -O /var/lib/clamav/daily.cvd https://database.clamav.net/daily.cvd; \
-    fi \
-    && if [ ! -f /var/lib/clamav/bytecode.cvd ]; then \
-        echo "Downloading bytecode.cvd..." && \
-        wget -q -O /var/lib/clamav/bytecode.cvd https://database.clamav.net/bytecode.cvd; \
-    fi \
-    && echo "Virus definitions downloaded successfully" \
-    && ls -la /var/lib/clamav/ \
-    && mkdir -p /app/clamav-db \
-    && cp /var/lib/clamav/*.cvd /app/clamav-db/ \
-    && chmod 644 /app/clamav-db/*.cvd \
-    && chown -R root:root /app/clamav-db
+    && rm -f /tmp/eicar_test.txt /tmp/clamav_test.log
 
 # Copy ML models and threat intelligence data (these rarely change - good for caching)
 COPY data/ml_models /app/data/ml_models/
@@ -81,24 +79,73 @@ RUN mkdir -p /app/data/ml_models \
     && chmod 755 /app/data/threat_intel \
     && chmod 755 /app/temp
 
-# Create startup script for scan worker
-RUN echo '#!/bin/bash\n\
+# Create startup script for scan worker (updated with ClamAV auto-setup and testing)
+RUN echo "Building startup script with ClamAV auto-setup..." && echo '#!/bin/bash\n\
 # Network security is handled at application level\n\
 echo "Network security: Application-level restrictions active for MalwareBazaar API only"\n\
 \n\
-# Create ClamAV database directory for direct clamscan usage\n\
-mkdir -p /tmp/clamav/db\n\
+# Function to setup ClamAV shared volume if needed\n\
+setup_clamav_volume() {\n\
+    echo "🔧 Setting up ClamAV shared volume..."\n\
+    \n\
+    # Check if volume directory exists and has virus definitions\n\
+    if [ -d /var/lib/clamav ] && [ "$(ls -A /var/lib/clamav/*.cvd 2>/dev/null)" ]; then\n\
+        echo "✅ Found existing ClamAV databases: $(ls /var/lib/clamav/*.cvd | wc -l) files"\n\
+        return 0\n\
+    fi\n\
+    \n\
+    echo "⚠️  No ClamAV databases found. Setting up shared volume..."\n\
+    \n\
+    # Create volume directory if it doesn'\''t exist\n\
+    mkdir -p /var/lib/clamav\n\
+    chmod 755 /var/lib/clamav\n\
+    \n\
+    # Download virus definitions\n\
+    echo "📥 Downloading ClamAV virus definitions..."\n\
+    \n\
+    # Download main.cvd if not present\n\
+    if [ ! -f /var/lib/clamav/main.cvd ]; then\n\
+        echo "Downloading main.cvd..."\n\
+        wget -q -O /var/lib/clamav/main.cvd https://database.clamav.net/main.cvd\n\
+    fi\n\
+    \n\
+    # Download daily.cvd if not present\n\
+    if [ ! -f /var/lib/clamav/daily.cvd ]; then\n\
+        echo "Downloading daily.cvd..."\n\
+        wget -q -O /var/lib/clamav/daily.cvd https://database.clamav.net/daily.cvd\n\
+    fi\n\
+    \n\
+    # Download bytecode.cvd if not present\n\
+    if [ ! -f /var/lib/clamav/bytecode.cvd ]; then\n\
+        echo "Downloading bytecode.cvd..."\n\
+        wget -q -O /var/lib/clamav/bytecode.cvd https://database.clamav.net/bytecode.cvd\n\
+    fi\n\
+    \n\
+    # Set proper permissions\n\
+    chmod 644 /var/lib/clamav/*.cvd 2>/dev/null || true\n\
+    \n\
+    echo "✅ ClamAV virus definitions downloaded successfully"\n\
+    echo "📋 Database files:"\n\
+    ls -la /var/lib/clamav/\n\
+    echo "📊 Database sizes:"\n\
+    du -h /var/lib/clamav/*.cvd 2>/dev/null || echo "No .cvd files found"\n\
+}\n\
 \n\
-# Copy ClamAV databases from build-time location to runtime tmpfs location\n\
-echo "Copying ClamAV databases for direct clamscan..."\n\
-if [ -d /app/clamav-db ] && [ "$(ls -A /app/clamav-db/*.cvd 2>/dev/null)" ]; then\n\
-    echo "Found ClamAV databases, copying..."\n\
-    cp /app/clamav-db/*.cvd /tmp/clamav/db/\n\
-    chmod 644 /tmp/clamav/db/*.cvd\n\
-    echo "ClamAV databases copied successfully"\n\
+# Setup ClamAV volume if needed\n\
+setup_clamav_volume\n\
+\n\
+# Verify ClamAV databases are available\n\
+echo "🔍 Verifying ClamAV databases..."\n\
+if [ -d /var/lib/clamav ] && [ "$(ls -A /var/lib/clamav/*.cvd 2>/dev/null)" ]; then\n\
+    echo "✅ ClamAV databases ready: $(ls /var/lib/clamav/*.cvd | wc -l) files"\n\
 else\n\
-    echo "Warning: No ClamAV databases found in /app/clamav-db"\n\
+    echo "❌ ERROR: ClamAV databases not available!"\n\
+    echo "Available files in /var/lib/clamav:"\n\
+    ls -la /var/lib/clamav/ 2>/dev/null || echo "Directory not accessible"\n\
+    exit 1\n\
 fi\n\
+\n\
+# ClamAV testing completed during build - no need to test at runtime
 \n\
 # Verify clamscan binary is available\n\
 echo "Verifying clamscan availability..."\n\

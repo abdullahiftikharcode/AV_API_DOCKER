@@ -1,0 +1,12 @@
+# Navigate to your project directory
+cd /path/to/API_AV
+
+# 1. Create the shared volume
+docker volume create virus-scanner-clamav
+
+# 2. Run the setup service to download virus definitions
+docker-compose -f docker/clamav-setup.yml --profile setup up
+
+# 3. Verify the volume was created and populated
+docker volume ls | grep virus-scanner-clamav
+docker run --rm -v virus-scanner-clamav:/var/lib/clamav alpine ls -la /var/lib/clamav/

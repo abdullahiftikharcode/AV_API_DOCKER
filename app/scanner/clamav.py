@@ -1,6 +1,6 @@
 import subprocess
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -68,7 +68,7 @@ class ClamAVScanner(BaseScanner):
                 return ScanResult(
                     safe=True,  # Fail open on resource constraints
                     threats=[],
-                    scan_time=datetime.utcnow(),
+                    scan_time=datetime.now(timezone.utc),
                     file_size=file_path.stat().st_size,
                     file_name=file_path.name,
                     scan_engine=self.name,
@@ -82,17 +82,22 @@ class ClamAVScanner(BaseScanner):
                 '--no-summary',           # Don't show summary
                 '--infected',              # Only show infected files
                 '--suppress-ok-results',   # Don't show OK results
-                '--database=/tmp/clamav/db',  # Use our virus databases
+                '--database=/var/lib/clamav',  # Use shared virus databases from mounted volume
                 str(file_path)
             ]
             
             # Run clamscan with timeout
+            print(f"DEBUG: Running ClamAV command: {' '.join(cmd)}")
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 timeout=300  # 5 minute timeout for large files
             )
+            
+            print(f"DEBUG: ClamAV return code: {result.returncode}")
+            print(f"DEBUG: ClamAV stdout: {result.stdout.strip()}")
+            print(f"DEBUG: ClamAV stderr: {result.stderr.strip()}")
             
             # Parse results
             threats = []
@@ -126,7 +131,7 @@ class ClamAVScanner(BaseScanner):
             return ScanResult(
                 safe=is_clean,
                 threats=threats,
-                scan_time=datetime.utcnow(),
+                scan_time=datetime.now(timezone.utc),
                 file_size=file_path.stat().st_size,
                 file_name=file_path.name,
                 scan_engine=self.name,
@@ -137,7 +142,7 @@ class ClamAVScanner(BaseScanner):
             return ScanResult(
                 safe=True,  # Fail open on timeout
                 threats=[],
-                scan_time=datetime.utcnow(),
+                scan_time=datetime.now(timezone.utc),
                 file_size=file_path.stat().st_size,
                 file_name=file_path.name,
                 scan_engine=self.name,
@@ -148,7 +153,7 @@ class ClamAVScanner(BaseScanner):
             return ScanResult(
                 safe=True,  # Fail open on errors
                 threats=[],
-                scan_time=datetime.utcnow(),
+                scan_time=datetime.now(timezone.utc),
                 file_size=file_path.stat().st_size,
                 file_name=file_path.name,
                 scan_engine=self.name,

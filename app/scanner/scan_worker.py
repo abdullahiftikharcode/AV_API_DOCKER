@@ -10,7 +10,7 @@ import sys
 import time
 import os
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add the app directory to Python path
 sys.path.insert(0, '/app')
@@ -121,7 +121,7 @@ async def main():
             print(json.dumps({
                 'safe': True,
                 'threats': [],
-                'scanTime': datetime.utcnow().isoformat(),
+                'scanTime': datetime.now(timezone.utc).isoformat(),
                 'scanDurationMs': 0,  # No actual scanning
                 'containerDurationMs': container_duration_ms,  # Total container time
                 'fileSize': 0,
@@ -146,7 +146,7 @@ async def main():
             print(json.dumps({
                 'safe': True,
                 'threats': [],
-                'scanTime': datetime.utcnow().isoformat(),
+                'scanTime': datetime.now(timezone.utc).isoformat(),
                 'scanDurationMs': 0,  # No actual scanning
                 'containerDurationMs': container_duration_ms,  # Total container time
                 'fileSize': 0,
@@ -211,13 +211,20 @@ async def main():
         except Exception as cleanup_error:
             print(f"WARNING: File cleanup failed: {cleanup_error}")
         
+        # CLEANUP: Clean up scanner resources (including HTTP sessions)
+        try:
+            await scanner.cleanup()
+            print("DEBUG: Scanner resources cleaned up successfully")
+        except Exception as cleanup_error:
+            print(f"WARNING: Scanner cleanup failed: {cleanup_error}")
+        
     except Exception as e:
         # Error response
         container_duration_ms = int((time.time() - container_start_time) * 1000) if container_start_time else 0
         error_response = {
             'safe': True,
             'threats': [],
-            'scanTime': datetime.utcnow().isoformat(),
+            'scanTime': datetime.now(timezone.utc).isoformat(),
             'scanDurationMs': 0,  # No successful scanning
             'containerDurationMs': container_duration_ms,  # Total container time
             'fileSize': file_path.stat().st_size if file_path and file_path.exists() else 0,
@@ -243,6 +250,14 @@ async def main():
                             print(f"DEBUG: Cleaned up remaining file: {remaining_file}")
         except Exception as cleanup_error:
             print(f"WARNING: File cleanup failed: {cleanup_error}")
+        
+        # CLEANUP: Clean up scanner resources even on error
+        try:
+            if 'scanner' in locals():
+                await scanner.cleanup()
+                print("DEBUG: Scanner resources cleaned up successfully (error case)")
+        except Exception as cleanup_error:
+            print(f"WARNING: Scanner cleanup failed (error case): {cleanup_error}")
         
         print(f"ERROR: {str(e)}", file=sys.stderr)
         sys.exit(1)

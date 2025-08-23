@@ -1,0 +1,20 @@
+# clamav-setup.yml
+version: '3.8'
+
+services:
+  clamav-setup:
+    image: clamav/clamav:latest
+    volumes:
+      - virus-scanner-clamav:/var/lib/clamav
+    command: >
+      sh -c "
+        freshclam --config-file=/etc/clamav/freshclam.conf &&
+        echo 'Virus definitions downloaded successfully' &&
+        ls -la /var/lib/clamav/ &&
+        du -h /var/lib/clamav/*.cvd
+      "
+    profiles: ["setup"]
+
+volumes:
+  virus-scanner-clamav:
+    external: true

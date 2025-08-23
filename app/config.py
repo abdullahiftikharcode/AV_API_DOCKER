@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     # Memory Management
     MAX_CONCURRENT_SCANS: int = 6
-    MEMORY_LIMIT_MB: int = 2000  # Reduced per container for concurrent operation
+    MEMORY_LIMIT_MB: int = 3000  # Increased per container to prevent memory pressure
     ENABLE_RESULT_CACHING: bool = True
     CACHE_TTL_HOURS: int = 24
 

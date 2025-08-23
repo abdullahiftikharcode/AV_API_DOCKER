@@ -79,7 +79,8 @@ class ContainerManager:
                 'image': self.container_image,
                 'command': ['/start.sh'],  # Just call the start script without arguments
                 'volumes': {
-                    str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'}
+                    str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
+                    'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'}  # Shared ClamAV virus definitions
                 },
                 'environment': {
                     'MAX_FILE_SIZE_MB': str(settings.MAX_FILE_SIZE_MB),
@@ -211,7 +212,8 @@ FILE_SIZE={len(file_content)}
                 'image': self.container_image,
                 'command': ['/start.sh'],  # Just call the start script without arguments
                 'volumes': {
-                    str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'}
+                    str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
+                    'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'}  # Shared ClamAV virus definitions
                 },
                 'environment': {
                     'MAX_FILE_SIZE_MB': str(settings.MAX_FILE_SIZE_MB),
@@ -284,6 +286,19 @@ FILE_SIZE={len(file_content)}
         """Clean up a container after log capture."""
         try:
             client = self._get_docker_client()
+            
+            # Check if container still exists before trying to remove it
+            try:
+                container_info = client._request('GET', f'/v1.41/containers/{container_id}/json')
+                if container_info.status_code == 404:
+                    # Container already removed, consider cleanup successful
+                    logger.info("container_already_removed", container_id=container_id)
+                    return True
+            except Exception:
+                # Container doesn't exist, consider cleanup successful
+                logger.info("container_already_removed", container_id=container_id)
+                return True
+            
             # Remove the container
             response = client._request('DELETE', f'/v1.41/containers/{container_id}?force=true')
             if response.status_code == 204:
@@ -370,8 +385,10 @@ FILE_SIZE={len(file_content)}
                 # Look for any lines that might contain JSON
                 json_candidates = []
                 for i, line in enumerate(lines):
-                    if line.strip().startswith('{') and line.strip().endswith('}'):
-                        json_candidates.append(f"Line {i+1}: {line.strip()}")
+                    # Clean the line of control characters first
+                    clean_line = ''.join(char for char in line if ord(char) >= 32 or char in '\n\r\t')
+                    if clean_line.strip().startswith('{') and clean_line.strip().endswith('}'):
+                        json_candidates.append(f"Line {i+1}: {clean_line.strip()}")
                 
                 if json_candidates:
                     logger.info("json_candidates_found", candidates=json_candidates)
@@ -418,7 +435,17 @@ FILE_SIZE={len(file_content)}
                                     logger.info("json_found_reverse", result_data=result_data)
                                     break
                             except json.JSONDecodeError:
-                                continue
+                                # Try with more aggressive cleaning
+                                try:
+                                    # Remove all non-printable characters except newlines and tabs
+                                    aggressive_clean = ''.join(char for char in line if char.isprintable() or char in '\n\r\t')
+                                    result_data = json.loads(aggressive_clean)
+                                    if isinstance(result_data, dict) and 'safe' in result_data:
+                                        json_result = result_data
+                                        logger.info("json_found_reverse_aggressive", result_data=result_data)
+                                        break
+                                except json.JSONDecodeError:
+                                    continue
                     
                     # If no valid JSON found in reverse, try forward search
                     if not json_result:
@@ -438,19 +465,31 @@ FILE_SIZE={len(file_content)}
                                     clean_line = ''.join(char for char in line if ord(char) >= 32 or char in '\n\r\t')
                                     result_data = json.loads(clean_line)
                                     
-                                    # Validate this looks like a scan result
+                                    # Validate this looks like a scan_result
                                     if isinstance(result_data, dict) and 'safe' in result_data:
                                         json_result = result_data
                                         logger.info("json_found_forward", result_data=result_data)
                                         break
                                 except json.JSONDecodeError:
-                                    continue
+                                    # Try with more aggressive cleaning
+                                    try:
+                                        # Remove all non-printable characters except newlines and tabs
+                                        aggressive_clean = ''.join(char for char in line if char.isprintable() or char in '\n\r\t')
+                                        result_data = json.loads(aggressive_clean)
+                                        if isinstance(result_data, dict) and 'safe' in result_data:
+                                            json_result = result_data
+                                            logger.info("json_found_forward_aggressive", result_data=result_data)
+                                            break
+                                    except json.JSONDecodeError:
+                                        continue
                     
                     # If still no result, try to find any JSON in the logs
                     if not json_result:
                         # Look for JSON pattern anywhere in the logs
                         import re
-                        json_matches = re.findall(r'\{[^{}]*\}', logs)
+                        # Clean logs of control characters first
+                        clean_logs = ''.join(char for char in logs if ord(char) >= 32 or char in '\n\r\t')
+                        json_matches = re.findall(r'\{[^{}]*\}', clean_logs)
                         for match in reversed(json_matches):
                             try:
                                 result_data = json.loads(match)
@@ -460,15 +499,45 @@ FILE_SIZE={len(file_content)}
                                     break
                             except json.JSONDecodeError:
                                 continue
+                        
+                        # If still no result, try to extract JSON from the raw logs with control characters
+                        if not json_result:
+                            try:
+                                # Look for JSON pattern in raw logs, handling control characters
+                                raw_json_matches = re.findall(r'\{[^{}]*\}', logs)
+                                for match in raw_json_matches:
+                                    try:
+                                        # Remove all control characters except newlines and tabs
+                                        clean_match = ''.join(char for char in match if char.isprintable() or char in '\n\r\t')
+                                        result_data = json.loads(clean_match)
+                                        if isinstance(result_data, dict) and 'safe' in result_data:
+                                            json_result = result_data
+                                            logger.info("json_found_raw_regex", result_data=result_data)
+                                            break
+                                    except json.JSONDecodeError:
+                                        continue
+                            except Exception as e:
+                                logger.warning("raw_json_extraction_failed", error=str(e))
                     
                     if json_result:
+                        logger.info("json_extraction_successful", result=json_result)
                         return {
                             'success': True,
                             'result': json_result,
                             'logs': logs
                         }
                     
-                    logger.error("no_valid_json_found", logs=logs[:1000])  # Log first 1000 chars for debugging
+                    # Log detailed information about what we found
+                    logger.error("no_valid_json_found", 
+                               logs_length=len(logs),
+                               logs_preview=logs[:500],
+                               logs_end=logs[-500:] if len(logs) > 500 else logs)
+                    
+                    # Try to find any JSON-like content for debugging
+                    import re
+                    potential_json = re.findall(r'\{[^{}]*\}', logs)
+                    logger.error("potential_json_found", count=len(potential_json), samples=potential_json[:3])
+                    
                     return {
                         'success': False,
                         'error': 'No valid JSON scan result found in logs',

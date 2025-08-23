@@ -15,7 +15,7 @@ services:
       - TEMP_DIR=/tmp/virus-scanner
       - LOG_LEVEL=INFO
       - MAX_CONCURRENT_SCANS=6
-      - MEMORY_LIMIT_MB=2000
+      - MEMORY_LIMIT_MB=3000
       - ENABLE_RESULT_CACHING=true
       - CACHE_TTL_HOURS=24
     volumes:
@@ -47,4 +47,6 @@ services:
 
 volumes:
   virus-scanner-temp:
+    driver: local
+  virus-scanner-clamav:
     driver: local 

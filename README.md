@@ -487,7 +487,7 @@ LOG_LEVEL=INFO
 MAX_CONCURRENT_SCANS=6
 
 # Container Resource Configuration
-MEMORY_LIMIT_MB=2000           # Per child container (2GB each)
+MEMORY_LIMIT_MB=3000           # Per child container (3GB each)
 CHILD_CONTAINER_MEMORY=4g      # Docker memory limit per container
 CHILD_CONTAINER_CPU=1.0        # CPU cores per container
 # ClamAV configuration (direct clamscan - no daemon)
@@ -701,7 +701,7 @@ The comprehensive analysis system requires **10GB RAM** for concurrent operation
 
 ### Architecture Improvements
 - **API-Only Design** - Removed frontend dependencies for streamlined deployment
-- **Concurrent Container Support** - 6 parallel scanning containers (2GB RAM, 1 CPU each)
+- **Concurrent Container Support** - 6 parallel scanning containers (3GB RAM, 1 CPU each)
 - **Authentication Middleware** - HMAC-SHA256 signature verification with FastAPI integration
 - **Timing Precision** - Separate measurement of pure scanning vs initialization overhead
 - **Container Optimization** - Docker layer caching for faster builds

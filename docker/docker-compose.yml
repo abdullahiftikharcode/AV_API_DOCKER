@@ -17,7 +17,7 @@ services:
       - TEMP_DIR=/tmp/virus-scanner
       - LOG_LEVEL=INFO
       - MAX_CONCURRENT_SCANS=6
-      - MEMORY_LIMIT_MB=2000
+      - MEMORY_LIMIT_MB=3000
       - ENABLE_RESULT_CACHING=true
       - CACHE_TTL_HOURS=24
     volumes:
@@ -25,7 +25,7 @@ services:
       - ../data/threat_intel:/app/data/threat_intel
       - ../rules:/app/rules
       - virus-scanner-temp:/tmp/virus-scanner
-      - virus-scanner-clamav:/var/lib/clamav  # Persist ClamAV virus definitions
+      # ClamAV volume removed - virus definitions are now managed separately via clamav-setup
       - /var/run/docker.sock:/var/run/docker.sock  # Docker socket for child container creation
     deploy:
       resources:
@@ -44,5 +44,4 @@ services:
 volumes:
   virus-scanner-temp:
     driver: local
-  virus-scanner-clamav:
-    driver: local
+  # virus-scanner-clamav volume is managed separately and used only by scanner containers

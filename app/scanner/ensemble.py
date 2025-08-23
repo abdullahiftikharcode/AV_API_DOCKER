@@ -1,6 +1,6 @@
 import asyncio
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Dict, Optional
 from cachetools import TTLCache
@@ -35,7 +35,7 @@ class EnsembleScanner(BaseScanner):
                 BytescaleScanner(),        # Fast cloud-based analysis (first priority)
                 ClamAVScanner(),           # Base detection (~45% weight)
                 YARAScanner(),             # Pattern matching (~25% weight)
-                MLDetector(),              # ML-based detection (~15% weight)
+                MLDetector(),              # Entropy-based mathematical analysis (~15% weight)
                 MalwareBazaarScanner(),    # Fast threat intelligence (~15% weight)
             ]
             
@@ -64,7 +64,7 @@ class EnsembleScanner(BaseScanner):
         return ScanResult(
             safe=True,
             threats=[],
-            scan_time=datetime.utcnow(),
+            scan_time=datetime.now(timezone.utc),
             file_size=file_path.stat().st_size,
             file_name=file_path.name,
             scan_engine=self.name,
@@ -166,7 +166,7 @@ class EnsembleScanner(BaseScanner):
         return ScanResult(
             safe=True,
             threats=[],  # All results were safe, so no threats
-            scan_time=datetime.utcnow(),
+            scan_time=datetime.now(timezone.utc),
             file_size=results[0].file_size,
             file_name=results[0].file_name,
             scan_engine=self.name,

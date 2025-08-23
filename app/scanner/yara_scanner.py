@@ -1,6 +1,6 @@
 import yara
 import mmap
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List
 from cachetools import TTLCache, cached
@@ -76,7 +76,7 @@ class YARAScanner(BaseScanner):
                 return ScanResult(
                     safe=True,
                     threats=[],
-                    scan_time=datetime.utcnow(),
+                    scan_time=datetime.now(timezone.utc),
                     file_size=file_path.stat().st_size,
                     file_name=file_path.name,
                     scan_engine=self.name,
@@ -115,7 +115,7 @@ class YARAScanner(BaseScanner):
             return ScanResult(
                 safe=len(threats) == 0,
                 threats=threats,
-                scan_time=datetime.utcnow(),
+                scan_time=datetime.now(timezone.utc),
                 file_size=file_path.stat().st_size,
                 file_name=file_path.name,
                 scan_engine=self.name,
@@ -126,7 +126,7 @@ class YARAScanner(BaseScanner):
             return ScanResult(
                 safe=True,  # Fail open on errors
                 threats=[],
-                scan_time=datetime.utcnow(),
+                scan_time=datetime.now(timezone.utc),
                 file_size=file_path.stat().st_size,
                 file_name=file_path.name,
                 scan_engine=self.name,

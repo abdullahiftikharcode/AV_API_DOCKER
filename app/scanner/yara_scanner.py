@@ -25,8 +25,8 @@ class YARAScanner(BaseScanner):
     async def initialize(self) -> None:
         """Initialize YARA scanner by loading rules."""
         try:
-            # Load YARA rules from the rules directory
-            rules_dir = Path(settings.BASE_DIR) / "rules"
+            # Load YARA rules from the configured rules directory
+            rules_dir = Path(settings.YARA_RULES_PATH)
             if not rules_dir.exists():
                 print(f"WARNING: Rules directory not found: {rules_dir}")
                 self.initialized = True

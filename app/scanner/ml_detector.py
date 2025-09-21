@@ -56,7 +56,18 @@ class MLDetector(BaseScanner):
 
     def _should_skip_entropy_analysis(self, file_path: Path) -> bool:
         """Check if file type should skip entropy analysis."""
-        file_extension = file_path.suffix.lower()
+        # Try to get the original filename from environment variable first
+        import os
+        original_filename = os.environ.get('ORIGINAL_FILENAME')
+        
+        if original_filename:
+            # Use original filename for extension detection
+            file_extension = Path(original_filename).suffix.lower()
+            print(f"DEBUG: Using original filename for extension detection: {original_filename} -> {file_extension}")
+        else:
+            # Fall back to current file path
+            file_extension = file_path.suffix.lower()
+            print(f"DEBUG: Using current file path for extension detection: {file_path.name} -> {file_extension}")
         
         # Extensions that should NOT use entropy analysis
         skip_extensions = {
@@ -82,14 +93,23 @@ class MLDetector(BaseScanner):
             '.bin'  # unless confirmed it's a PE file
         }
         
-        return file_extension in skip_extensions
+        should_skip = file_extension in skip_extensions
+        print(f"DEBUG: Should skip entropy analysis for {file_extension}: {should_skip}")
+        return should_skip
 
     def _get_human_readable_threats(self, entropy: float, file_path: Path) -> List[str]:
         """Convert technical analysis to human-readable threat descriptions."""
         threats = []
         
         # Check file extension for additional context
-        file_extension = file_path.suffix.lower()
+        # Try to get the original filename from environment variable first
+        import os
+        original_filename = os.environ.get('ORIGINAL_FILENAME')
+        
+        if original_filename:
+            file_extension = Path(original_filename).suffix.lower()
+        else:
+            file_extension = file_path.suffix.lower()
         
         # For executables, both very high AND very low entropy are suspicious
         if file_extension in ['.exe', '.dll', '.sys']:

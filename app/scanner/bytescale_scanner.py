@@ -53,7 +53,16 @@ class BytescaleScanner(BaseScanner):
                 return True
             
             # Check file extension against Bytescale's rejected extensions
-            file_ext = file_path.suffix.lower().lstrip('.')
+            # Try to get the original filename from environment variable first
+            import os
+            original_filename = os.environ.get('ORIGINAL_FILENAME')
+            
+            if original_filename:
+                file_ext = Path(original_filename).suffix.lower().lstrip('.')
+                print(f"DEBUG: Using original filename for extension check: {original_filename} -> {file_ext}")
+            else:
+                file_ext = file_path.suffix.lower().lstrip('.')
+                print(f"DEBUG: Using current file path for extension check: {file_path.name} -> {file_ext}")
             
             # Comprehensive list of extensions that Bytescale doesn't support
             REJECTED_EXTS = {
@@ -101,8 +110,13 @@ class BytescaleScanner(BaseScanner):
             }
             
             # Parameters with filename
+            # Use original filename if available, otherwise fall back to current filename
+            import os
+            original_filename = os.environ.get('ORIGINAL_FILENAME')
+            filename_for_api = original_filename if original_filename else file_path.name
+            
             params = {
-                "fileName": file_path.name
+                "fileName": filename_for_api
             }
             
             async with self.session.post(url, data=file_data, headers=headers, params=params) as response:

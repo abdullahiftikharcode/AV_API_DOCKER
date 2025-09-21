@@ -34,7 +34,7 @@ class ContainerManager:
         self.docker_client = None
         self.container_image = "virus-scanner-scanner:latest"
         self.scan_timeout = settings.SCAN_TIMEOUT_SECONDS
-        self.max_memory = "8g"  # Increased to 8GB for large file scanning
+        self.max_memory = "16g"  # Increased to 16GB for large file scanning
         self.max_cpu = "1.0"    # Updated to 1 CPU core for concurrent containers
     
     def get_allowed_extensions(self) -> List[str]:
@@ -252,6 +252,100 @@ FILE_SIZE={len(file_content)}
             
             # Log streaming container creation (without sensitive config details)
             logger.info("creating_streaming_container", container_id="pending", image=self.container_image)
+            
+            container_id = client.create_container(container_config)
+            if not container_id:
+                logger.error("streaming_container_creation_failed")
+                return None
+            
+            logger.info("streaming_container_created_successfully", container_id=container_id)
+            
+            # Start the container first before executing commands
+            if not client.start_container(container_id):
+                logger.error("streaming_container_start_failed", container_id=container_id)
+                client.remove_container(container_id, force=True)
+                return None
+            
+            logger.info("streaming_container_started", container_id=container_id)
+            
+            # Wait a moment and check if container is still running
+            await asyncio.sleep(0.5)
+            initial_status = client.get_container_status(container_id)
+            logger.info("container_initial_status", container_id=container_id, status=initial_status)
+            
+            if initial_status != "running":
+                logger.error("container_exited_immediately", container_id=container_id, status=initial_status)
+                # Try to get container logs to see why it exited
+                logs = client.get_container_logs(container_id)
+                if logs:
+                    logger.error("container_exit_logs", container_id=container_id, logs=logs[:500])
+                client.remove_container(container_id, force=True)
+                return None
+            
+            # The /scan directory is now created by the startup script
+            # No need to execute mkdir command - the container handles this internally
+            logger.info("streaming_container_ready", container_id=container_id, filename=scan_filename)
+            
+            return container_id
+            
+        except Exception as e:
+            logger.error("streaming_container_creation_failed", error=str(e), filename=filename)
+            return None
+
+    async def create_streaming_container_with_volume(self, filename: str, temp_file_path: str) -> Optional[str]:
+        """Create a fresh container for streaming file uploads using volume mount."""
+        try:
+            # Create a temporary file name for the scan
+            scan_filename = filename
+            
+            # Create container but don't start yet
+            client = self._get_docker_client()
+            
+            # Use volume mount instead of put_file
+            container_config = {
+                'image': self.container_image,
+                'command': ['/start.sh'],  # Use the normal startup script
+                'volumes': {
+                    str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
+                    'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'},  # Shared ClamAV virus definitions
+                    temp_file_path: {'bind': f'/scan/{scan_filename}', 'mode': 'ro'}  # Mount the temp file directly
+                },
+                'environment': {
+                    'MAX_FILE_SIZE_MB': str(settings.MAX_FILE_SIZE_MB),
+                    'SCAN_TIMEOUT_SECONDS': str(settings.SCAN_TIMEOUT_SECONDS),
+                    'ML_ENABLE_PE_ANALYSIS': str(settings.ML_ENABLE_PE_ANALYSIS),
+                    'ML_ENABLE_ENTROPY_ANALYSIS': str(settings.ML_ENABLE_ENTROPY_ANALYSIS),
+                    # Primary method: Environment variables
+                    'SCAN_FILE_PATH': f'/scan/{scan_filename}',
+                    'SCAN_TIMEOUT': str(self.scan_timeout),
+                    'SCAN_MODE': 'streaming',
+                    # Pass through HMAC configuration to child containers
+                    'HMAC_SECRET_KEY': os.environ.get('HMAC_SECRET_KEY', ''),
+                    'HMAC_ENABLED': str(settings.HMAC_ENABLED),
+                    'HMAC_TIMESTAMP_TOLERANCE_SECONDS': str(settings.HMAC_TIMESTAMP_TOLERANCE_SECONDS),
+                    # Pass through MalwareBazaar API configuration to child containers
+                    'MALWAREBazaar_API_KEY': os.environ.get('MALWAREBazaar_API_KEY', ''),
+                    'MALWAREBazaar_API_KEY_BACKUP': os.environ.get('MALWAREBazaar_API_KEY_BACKUP', ''),
+                    'MALWAREBazaar_ENABLED': str(settings.MALWAREBazaar_ENABLED),
+                    'MALWAREBazaar_TIMEOUT': str(settings.MALWAREBazaar_TIMEOUT),
+                    # Pass through Bytescale API configuration to child containers
+                    'BYTESCALE_API_KEY': os.environ.get('BYTESCALE_API_KEY', ''),
+                    'BYTESCALE_ACCOUNT_ID': os.environ.get('BYTESCALE_ACCOUNT_ID', ''),
+                    'BYTESCALE_ENABLED': str(settings.BYTESCALE_ENABLED),
+                    'BYTESCALE_TIMEOUT': str(settings.BYTESCALE_TIMEOUT)
+                },
+                'mem_limit': self.max_memory,
+                'cpu_period': 100000,
+                'cpu_quota': int(float(self.max_cpu) * 100000),
+                'network_disabled': False,  # Enable limited network access for MalwareBazaar API
+                'read_only': False,  # Allow writes for ClamAV logs
+                'tmpfs': {'/tmp': 'size=100m'},  # Temporary filesystem (reduced since ClamAV DBs are now shared)
+                'detach': False,
+                'AutoRemove': False, # Disable auto-removal to capture logs
+            }
+            
+            # Log streaming container creation (without sensitive config details)
+            logger.info("creating_streaming_container_with_volume", container_id="pending", image=self.container_image, temp_file=temp_file_path)
             
             container_id = client.create_container(container_config)
             if not container_id:
@@ -746,8 +840,8 @@ FILE_SIZE={len(file_content)}
             temp_file.write(b''.join(file_chunks))
             temp_file.close()
             
-            # Create fresh container for streaming
-            container_id = await self.create_streaming_container(upload_file.filename)
+            # Create fresh container with volume mount
+            container_id = await self.create_streaming_container_with_volume(upload_file.filename, str(temp_file_path))
             if not container_id:
                 temp_file_path.unlink()
                 return ContainerScanResult(
@@ -762,100 +856,52 @@ FILE_SIZE={len(file_content)}
                     error="Failed to create streaming container"
                 )
             
-            # Copy temp file to container's /scan directory
-            logger.info("copying_temp_file_to_container", container_id=container_id, filename=upload_file.filename, temp_file=str(temp_file_path))
+            logger.info("file_mounted_to_container", container_id=container_id, filename=upload_file.filename, file_size=file_size)
             
-            # Copy the temp file to the container
-            client = self._get_docker_client()
-            if not client.put_file(container_id, str(temp_file_path), f'/scan/{upload_file.filename}'):
-                logger.error("failed_to_copy_temp_file", container_id=container_id, temp_file=str(temp_file_path))
-                temp_file_path.unlink()
-                await self.cleanup_container(container_id)
-                return ContainerScanResult(
-                    safe=True,
-                    threats=[],
-                    scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                    scan_duration_ms=int((time.time() - start_time) * 1000),
-                    container_duration_ms=0,
-                    file_size=file_size,
-                    file_name=upload_file.filename,
-                    scan_engine="container_ensemble",
-                    error="Failed to copy file to container"
-                )
+            # Wait for container to complete (it will run the scan automatically)
+            result = await self.wait_for_container_completion(container_id, self.scan_timeout)
             
             # Clean up temp file
             temp_file_path.unlink()
             
-            logger.info("file_streamed_to_container", container_id=container_id, filename=upload_file.filename, file_size=file_size)
+            # Calculate scan duration
+            scan_duration_ms = int((time.time() - start_time) * 1000)
             
-            # Now execute the scan command in the running container
-            logger.info("executing_scan_command", container_id=container_id, filename=upload_file.filename)
-            exec_result = client.exec_in_container(container_id, ['/start.sh'])
-            if not exec_result or exec_result.get('ExitCode', 1) != 0:
-                logger.error("scan_execution_failed", container_id=container_id, exit_code=exec_result.get('ExitCode', 1))
-                await self.cleanup_container(container_id)
-                return ContainerScanResult(
-                    safe=True,
-                    threats=[],
-                    scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                    scan_duration_ms=int((time.time() - start_time) * 1000),
-                    container_duration_ms=0,
-                    file_size=file_size,
-                    file_name=upload_file.filename,
-                    scan_engine="container_ensemble",
-                    error="Failed to execute scan command"
-                )
-            
-            # Get the scan result from the execution output
-            scan_output = exec_result.get('Output', '')
-            logger.info("scan_execution_completed", container_id=container_id, output_length=len(scan_output))
-            
-            # Parse the JSON result from the scan output
-            try:
-                # Find the JSON result in the output (it should be the last line)
-                lines = scan_output.strip().split('\n')
-                json_result = None
-                for line in reversed(lines):
-                    if line.strip().startswith('{') and line.strip().endswith('}'):
-                        json_result = json.loads(line.strip())
-                        break
+            if result['success']:
+                # Extract timing information from the scan worker's JSON response
+                scan_result = result['result']
                 
-                if json_result:
-                    return ContainerScanResult(
-                        safe=json_result.get('safe', True),
-                        threats=json_result.get('threats', []),
-                        scan_time=json_result.get('scanTime', time.strftime("%Y-%m-%dT%H:%M:%S")),
-                        scan_duration_ms=json_result.get('scanDurationMs', 0),
-                        container_duration_ms=json_result.get('containerDurationMs', 0),
-                        file_size=json_result.get('fileSize', file_size),
-                        file_name=json_result.get('fileName', upload_file.filename),
-                        scan_engine=json_result.get('scanEngine', 'container_ensemble')
-                    )
-                else:
-                    logger.error("no_json_result_found", container_id=container_id, output=scan_output[:500])
-                    return ContainerScanResult(
-                        safe=True,
-                        threats=[],
-                        scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                        scan_duration_ms=int((time.time() - start_time) * 1000),
-                        container_duration_ms=0,
-                        file_size=file_size,
-                        file_name=upload_file.filename,
-                        scan_engine="container_ensemble",
-                        error="No valid scan result found in output"
-                    )
-            except json.JSONDecodeError as e:
-                logger.error("json_parse_error", container_id=container_id, error=str(e), output=scan_output[:500])
+                # Get the pure scanning time from the container (excluding initialization)
+                pure_scan_duration_ms = scan_result.get('scanDurationMs', 0)
+                
+                # Get the total container time from the container (including all overhead)
+                container_duration_ms = scan_result.get('containerDurationMs', 0)
+                
+                # If container didn't provide timing, fall back to our measurement
+                if container_duration_ms == 0:
+                    container_duration_ms = scan_duration_ms
+                
+                return ContainerScanResult(
+                    safe=scan_result.get('safe', True),
+                    threats=scan_result.get('threats', []),
+                    scan_time=scan_result.get('scanTime', time.strftime("%Y-%m-%dT%H:%M:%S")),
+                    scan_duration_ms=pure_scan_duration_ms,  # Pure scanning time (excluding initialization)
+                    container_duration_ms=container_duration_ms,  # Total container time including all overhead
+                    file_size=scan_result.get('fileSize', file_size),
+                    file_name=scan_result.get('fileName', upload_file.filename),
+                    scan_engine=scan_result.get('scanEngine', 'container_ensemble')
+                )
+            else:
                 return ContainerScanResult(
                     safe=True,
                     threats=[],
                     scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                    scan_duration_ms=int((time.time() - start_time) * 1000),
+                    scan_duration_ms=scan_duration_ms,
                     container_duration_ms=0,
                     file_size=file_size,
                     file_name=upload_file.filename,
                     scan_engine="container_ensemble",
-                    error=f"Failed to parse scan result: {str(e)}"
+                    error=result['error']
                 )
                 
         except Exception as e:

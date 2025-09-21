@@ -454,7 +454,8 @@ class DockerClient:
             
             tar_buffer = io.BytesIO()
             with tarfile.open(fileobj=tar_buffer, mode='w') as tar:
-                tarinfo = tarfile.TarInfo(name=os.path.basename(container_path))
+                # Use the full container path as the filename in the tar archive
+                tarinfo = tarfile.TarInfo(name=container_path.lstrip('/'))
                 tarinfo.size = len(file_data)
                 tarinfo.mode = 0o644
                 tar.addfile(tarinfo, io.BytesIO(file_data))
@@ -463,7 +464,7 @@ class DockerClient:
             
             response = self._request(
                 'PUT',
-                f'/v1.41/containers/{container_id}/archive?path={os.path.dirname(container_path)}',
+                f'/v1.41/containers/{container_id}/archive?path=/',
                 headers={'Content-Type': 'application/x-tar'},
                 data=tar_data
             )

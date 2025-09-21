@@ -441,6 +441,9 @@ FILE_SIZE={len(file_content)}
                 
                 logger.info("file_put_success", container_id=container_id, filename=simple_filename)
                 
+                # Add a small delay to ensure file is properly written to container filesystem
+                await asyncio.sleep(0.5)
+                
             except Exception as e:
                 logger.error("file_put_exception", container_id=container_id, error=str(e))
                 client.remove_container(container_id, force=True)

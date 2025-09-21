@@ -330,14 +330,13 @@ FILE_SIZE={len(file_content)}
             # Store scan_dir for cleanup later
             self._current_scan_dir = scan_dir
             
-            # Use volume mount instead of put_file
+            # Use put_file method instead of volume mount (more reliable)
             container_config = {
                 'image': self.container_image,
                 'command': ['/start.sh'],  # Use the normal startup script
                 'volumes': {
                     str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
                     'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'},  # Shared ClamAV virus definitions
-                    str(scan_dir): {'bind': '/scan', 'mode': 'ro'}  # Mount the unique scan directory
                 },
                 'environment': {
                     'MAX_FILE_SIZE_MB': str(settings.MAX_FILE_SIZE_MB),
@@ -409,6 +408,25 @@ FILE_SIZE={len(file_content)}
                 logs = client.get_container_logs(container_id)
                 if logs:
                     logger.error("container_exit_logs", container_id=container_id, logs=logs[:500])
+                client.remove_container(container_id, force=True)
+                return None
+            
+            # Copy the file to the container using put_file method
+            try:
+                with open(unique_file_path, 'rb') as f:
+                    file_content = f.read()
+                
+                # Put the file in the container
+                success = client.put_file(container_id, '/scan/scan_file.exe', file_content)
+                if not success:
+                    logger.error("file_put_failed", container_id=container_id, filename=simple_filename)
+                    client.remove_container(container_id, force=True)
+                    return None
+                
+                logger.info("file_put_success", container_id=container_id, filename=simple_filename, file_size=len(file_content))
+                
+            except Exception as e:
+                logger.error("file_put_exception", container_id=container_id, error=str(e))
                 client.remove_container(container_id, force=True)
                 return None
             

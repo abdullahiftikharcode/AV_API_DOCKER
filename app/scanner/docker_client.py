@@ -93,8 +93,9 @@ class DockerClient:
                     'Tmpfs': config.get('tmpfs', {}),
                     'AutoRemove': config.get('AutoRemove', False),  # Use passed config or default to False
                     'Privileged': False,
-                    'CapDrop': ['AUDIT_WRITE', 'CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'FSETID', 'KILL', 'MKNOD', 'NET_RAW', 'SETGID', 'SETUID', 'SYS_CHROOT'],
-                    'SecurityOpt': ['no-new-privileges'],
+                    # Temporarily remove security restrictions for streaming containers
+                    # 'CapDrop': ['AUDIT_WRITE', 'CHOWN', 'DAC_OVERRIDE', 'FOWNER', 'FSETID', 'KILL', 'MKNOD', 'NET_RAW', 'SETGID', 'SETUID', 'SYS_CHROOT'],
+                    # 'SecurityOpt': ['no-new-privileges'],
                     'Dns': ['8.8.8.8', '1.1.1.1']  # Add DNS servers for name resolution
                 }
             }

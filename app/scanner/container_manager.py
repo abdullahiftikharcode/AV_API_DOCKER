@@ -416,8 +416,8 @@ FILE_SIZE={len(file_content)}
             for attempt in range(max_retries):
                 try:
                     # Check if /scan directory exists by trying to create it
-                    success = client.execute_command(container_id, "mkdir -p /scan")
-                    if success:
+                    result = client.exec_in_container(container_id, ["mkdir", "-p", "/scan"])
+                    if result and result.get('ExitCode') == 0:
                         logger.info("scan_directory_ready", container_id=container_id, attempt=attempt+1)
                         break
                 except Exception as e:

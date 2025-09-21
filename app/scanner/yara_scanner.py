@@ -50,9 +50,21 @@ class YARAScanner(BaseScanner):
                     print(f"WARNING: Failed to compile YARA rule {rule_file}: {e}")
 
             if compiled_rules:
-                # Combine all rules into one
-                self.rules = yara.compile(source='\n'.join([rule.source for rule in compiled_rules]))
-                print(f"DEBUG: YARA scanner initialized with {len(compiled_rules)} rules")
+                # For YARA Python 4.5.0+, we need to read the source files again
+                # since compiled rules don't have a 'source' attribute
+                combined_source = []
+                for rule_file in rule_files:
+                    try:
+                        with open(rule_file, 'r', encoding='utf-8', errors='ignore') as f:
+                            combined_source.append(f.read())
+                    except Exception as e:
+                        print(f"WARNING: Failed to read rule file {rule_file}: {e}")
+                
+                if combined_source:
+                    self.rules = yara.compile(source='\n'.join(combined_source))
+                    print(f"DEBUG: YARA scanner initialized with {len(compiled_rules)} rules")
+                else:
+                    print("WARNING: No YARA rule sources could be read")
             else:
                 print("WARNING: No YARA rules could be compiled")
 

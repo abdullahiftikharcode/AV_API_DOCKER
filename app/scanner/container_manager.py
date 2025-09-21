@@ -381,6 +381,7 @@ FILE_SIZE={len(file_content)}
                     'SCAN_FILE_PATH': f'/scan/{simple_filename}',
                     'SCAN_TIMEOUT': str(self.scan_timeout),
                     'SCAN_MODE': 'streaming',
+                    'ORIGINAL_FILENAME': filename,  # Pass the original filename
                     # Pass through HMAC configuration to child containers
                     'HMAC_SECRET_KEY': os.environ.get('HMAC_SECRET_KEY', ''),
                     'HMAC_ENABLED': str(settings.HMAC_ENABLED),
@@ -961,7 +962,7 @@ FILE_SIZE={len(file_content)}
             temp_file.close()
             
             # Create fresh container with volume mount
-            container_id = await self.create_streaming_container_with_volume(temp_file_path.name, str(temp_file_path))
+            container_id = await self.create_streaming_container_with_volume(upload_file.filename, str(temp_file_path))
             if not container_id:
                 temp_file_path.unlink()
                 return ContainerScanResult(

@@ -151,6 +151,8 @@ async def main():
         print(f"DEBUG: File exists: {file_path.exists()}")
         
         if not file_path.exists():
+            # Get original filename from environment variable
+            original_filename = os.environ.get('ORIGINAL_FILENAME', file_path.name)
             container_duration_ms = int((time.time() - container_start_time) * 1000)
             print(json.dumps({
                 'safe': True,
@@ -159,7 +161,7 @@ async def main():
                 'scanDurationMs': 0,  # No actual scanning
                 'containerDurationMs': container_duration_ms,  # Total container time
                 'fileSize': 0,
-                'fileName': file_path.name,
+                'fileName': original_filename,
                 'scanEngine': 'container_ensemble',
                 'error': 'File not found'
             }))
@@ -171,10 +173,17 @@ async def main():
         await scanner.initialize()
         print("DEBUG: Ensemble scanner initialized successfully")
         
+        # Get original filename from environment variable
+        original_filename = os.environ.get('ORIGINAL_FILENAME', file_path.name)
+        print(f"DEBUG: Using original filename: {original_filename}")
+        
         # Perform scan
         print("DEBUG: Starting scan...")
         result = await scanner.scan(file_path)
         print("DEBUG: Scan completed")
+        
+        # Override the filename in the result with the original filename
+        result.file_name = original_filename
         
         # Get the pure scanning time from the ensemble scanner result
         pure_scan_duration_ms = result.scan_duration_ms or 0

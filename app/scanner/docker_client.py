@@ -408,6 +408,18 @@ class DockerClient:
             logger.error("exec_in_container_exception", container_id=container_id, error=str(e))
             return None
 
+    def get_container_status(self, container_id: str) -> Optional[str]:
+        """Get container status."""
+        try:
+            response = self._request('GET', f'/v1.41/containers/{container_id}/json')
+            if response.status_code == 200:
+                container_info = response.json()
+                return container_info.get('State', {}).get('Status', 'unknown')
+            return None
+        except Exception as e:
+            logger.error("get_container_status_exception", container_id=container_id, error=str(e))
+            return None
+
     def put_archive(self, container_id: str, path: str, data: bytes) -> bool:
         try:
             response = self._request(
@@ -416,6 +428,10 @@ class DockerClient:
                 headers={'Content-Type': 'application/x-tar'},
                 data=data
             )
+            logger.info("put_archive_response", container_id=container_id, path=path, status_code=response.status_code, data_size=len(data))
+            if response.status_code != 200:
+                logger.error("put_archive_failed", container_id=container_id, status_code=response.status_code, response_text=response.text[:500])
             return response.status_code == 200
-        except:
+        except Exception as e:
+            logger.error("put_archive_exception", container_id=container_id, error=str(e))
             return False

@@ -210,7 +210,7 @@ FILE_SIZE={len(file_content)}
             # Use environment variables and file-based configuration instead of command-line arguments
             container_config = {
                 'image': self.container_image,
-                'command': ['/start.sh'],  # Just call the start script without arguments
+                'command': ['sh', '-c', f'while [ ! -f /scan/{scan_filename} ]; do sleep 0.1; done && /start.sh'],  # Wait for file then start
                 'volumes': {
                     str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
                     'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'}  # Shared ClamAV virus definitions
@@ -762,8 +762,14 @@ FILE_SIZE={len(file_content)}
             
             # Copy tar archive to container
             client = self._get_docker_client()
+            logger.info("attempting_file_copy", container_id=container_id, tar_size=len(tar_data), filename=upload_file.filename)
+            
+            # Check if container is still running before copying
+            container_status = client.get_container_status(container_id)
+            logger.info("container_status_before_copy", container_id=container_id, status=container_status)
+            
             if not client.put_archive(container_id, '/scan', tar_data):
-                logger.error("failed_to_copy_streamed_file", container_id=container_id)
+                logger.error("failed_to_copy_streamed_file", container_id=container_id, tar_size=len(tar_data))
                 await self.cleanup_container(container_id)
                 return ContainerScanResult(
                     safe=True,

@@ -211,7 +211,7 @@ FILE_SIZE={len(file_content)}
             # Use environment variables and file-based configuration instead of command-line arguments
             container_config = {
                 'image': self.container_image,
-                'command': ['sh', '-c', 'sleep infinity'],  # Keep container running until we copy the file
+                'command': ['tail', '-f', '/dev/null'],  # Keep container running until we copy the file
                 'volumes': {
                     str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
                     'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'}  # Shared ClamAV virus definitions
@@ -267,6 +267,20 @@ FILE_SIZE={len(file_content)}
                 return None
             
             logger.info("streaming_container_started", container_id=container_id)
+            
+            # Wait a moment and check if container is still running
+            await asyncio.sleep(0.5)
+            initial_status = client.get_container_status(container_id)
+            logger.info("container_initial_status", container_id=container_id, status=initial_status)
+            
+            if initial_status != "running":
+                logger.error("container_exited_immediately", container_id=container_id, status=initial_status)
+                # Try to get container logs to see why it exited
+                logs = client.get_container_logs(container_id)
+                if logs:
+                    logger.error("container_exit_logs", container_id=container_id, logs=logs[:500])
+                client.remove_container(container_id, force=True)
+                return None
             
             # The /scan directory is now created by the startup script
             # No need to execute mkdir command - the container handles this internally
@@ -768,6 +782,31 @@ FILE_SIZE={len(file_content)}
             # Check if container is still running before copying
             container_status = client.get_container_status(container_id)
             logger.info("container_status_before_copy", container_id=container_id, status=container_status)
+            
+            # If container is not running, try to restart it
+            if container_status != "running":
+                logger.warning("container_not_running_before_copy", container_id=container_id, status=container_status)
+                # Try to start the container again
+                if client.start_container(container_id):
+                    logger.info("container_restarted_successfully", container_id=container_id)
+                    # Wait a moment for container to fully start
+                    await asyncio.sleep(1)
+                    container_status = client.get_container_status(container_id)
+                    logger.info("container_status_after_restart", container_id=container_id, status=container_status)
+                else:
+                    logger.error("failed_to_restart_container", container_id=container_id)
+                    await self.cleanup_container(container_id)
+                    return ContainerScanResult(
+                        safe=True,
+                        threats=[],
+                        scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        scan_duration_ms=int((time.time() - start_time) * 1000),
+                        container_duration_ms=0,
+                        file_size=file_size,
+                        file_name=upload_file.filename,
+                        scan_engine="container_ensemble",
+                        error="Container not running and failed to restart"
+                    )
             
             if not client.put_archive(container_id, '/scan', tar_data):
                 logger.error("failed_to_copy_streamed_file", container_id=container_id, tar_size=len(tar_data))

@@ -211,7 +211,7 @@ FILE_SIZE={len(file_content)}
             # Use environment variables and file-based configuration instead of command-line arguments
             container_config = {
                 'image': self.container_image,
-                'command': ['tail', '-f', '/dev/null'],  # Keep container running until we copy the file
+                'command': ['python', '-c', 'import time; time.sleep(999999)'],  # Keep container running until we copy the file
                 'volumes': {
                     str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
                     'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'}  # Shared ClamAV virus definitions

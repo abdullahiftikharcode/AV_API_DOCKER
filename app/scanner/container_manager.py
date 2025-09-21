@@ -211,7 +211,7 @@ FILE_SIZE={len(file_content)}
             # Use environment variables and file-based configuration instead of command-line arguments
             container_config = {
                 'image': self.container_image,
-                'command': ['python', '-c', 'import time; time.sleep(999999)'],  # Keep container running until we copy the file
+                'command': ['/start.sh'],  # Use the normal startup script
                 'volumes': {
                     str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
                     'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'}  # Shared ClamAV virus definitions
@@ -722,9 +722,34 @@ FILE_SIZE={len(file_content)}
             chunk_size = 64 * 1024  # 64KB chunks for streaming
             max_size_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
             
+            # Create a temporary file first
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=f"_{upload_file.filename}")
+            temp_file_path = Path(temp_file.name)
+            
+            # Read and write the file content
+            file_chunks = []
+            while chunk := await upload_file.read(chunk_size):
+                file_size += len(chunk)
+                
+                # Check file size limit
+                if file_size > max_size_bytes:
+                    temp_file.close()
+                    temp_file_path.unlink()
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File too large. Maximum size is {settings.MAX_FILE_SIZE_MB}MB"
+                    )
+                
+                file_chunks.append(chunk)
+            
+            # Write all chunks to temp file
+            temp_file.write(b''.join(file_chunks))
+            temp_file.close()
+            
             # Create fresh container for streaming
             container_id = await self.create_streaming_container(upload_file.filename)
             if not container_id:
+                temp_file_path.unlink()
                 return ContainerScanResult(
                     safe=True,
                     threats=[],
@@ -737,79 +762,14 @@ FILE_SIZE={len(file_content)}
                     error="Failed to create streaming container"
                 )
             
-            # Stream file content directly to container
-            logger.info("starting_file_stream", container_id=container_id, filename=upload_file.filename)
+            # Copy temp file to container's /scan directory
+            logger.info("copying_temp_file_to_container", container_id=container_id, filename=upload_file.filename, temp_file=str(temp_file_path))
             
-            # Create tar archive in memory and stream to container
-            import tarfile
-            import io
-            
-            # First pass: read entire file to get size and validate
-            file_chunks = []
-            while chunk := await upload_file.read(chunk_size):
-                file_size += len(chunk)
-                
-                # Check file size limit
-                if file_size > max_size_bytes:
-                    await self.cleanup_container(container_id)
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"File too large. Maximum size is {settings.MAX_FILE_SIZE_MB}MB"
-                    )
-                
-                file_chunks.append(chunk)
-            
-            # Create tar archive with complete file
-            tar_buffer = io.BytesIO()
-            with tarfile.open(fileobj=tar_buffer, mode='w') as tar:
-                # Create tarinfo for the file
-                tarinfo = tarfile.TarInfo(name=upload_file.filename)
-                tarinfo.size = file_size
-                tarinfo.mode = 0o644
-                
-                # Combine all chunks and add to tar
-                file_data = b''.join(file_chunks)
-                tar.addfile(tarinfo, io.BytesIO(file_data))
-            
-            # Get tar data
-            tar_buffer.seek(0)
-            tar_data = tar_buffer.getvalue()
-            
-            # Copy tar archive to container
+            # Copy the temp file to the container
             client = self._get_docker_client()
-            logger.info("attempting_file_copy", container_id=container_id, tar_size=len(tar_data), filename=upload_file.filename)
-            
-            # Check if container is still running before copying
-            container_status = client.get_container_status(container_id)
-            logger.info("container_status_before_copy", container_id=container_id, status=container_status)
-            
-            # If container is not running, try to restart it
-            if container_status != "running":
-                logger.warning("container_not_running_before_copy", container_id=container_id, status=container_status)
-                # Try to start the container again
-                if client.start_container(container_id):
-                    logger.info("container_restarted_successfully", container_id=container_id)
-                    # Wait a moment for container to fully start
-                    await asyncio.sleep(1)
-                    container_status = client.get_container_status(container_id)
-                    logger.info("container_status_after_restart", container_id=container_id, status=container_status)
-                else:
-                    logger.error("failed_to_restart_container", container_id=container_id)
-                    await self.cleanup_container(container_id)
-                    return ContainerScanResult(
-                        safe=True,
-                        threats=[],
-                        scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                        scan_duration_ms=int((time.time() - start_time) * 1000),
-                        container_duration_ms=0,
-                        file_size=file_size,
-                        file_name=upload_file.filename,
-                        scan_engine="container_ensemble",
-                        error="Container not running and failed to restart"
-                    )
-            
-            if not client.put_archive(container_id, '/scan', tar_data):
-                logger.error("failed_to_copy_streamed_file", container_id=container_id, tar_size=len(tar_data))
+            if not client.put_file(container_id, str(temp_file_path), f'/scan/{upload_file.filename}'):
+                logger.error("failed_to_copy_temp_file", container_id=container_id, temp_file=str(temp_file_path))
+                temp_file_path.unlink()
                 await self.cleanup_container(container_id)
                 return ContainerScanResult(
                     safe=True,
@@ -820,8 +780,11 @@ FILE_SIZE={len(file_content)}
                     file_size=file_size,
                     file_name=upload_file.filename,
                     scan_engine="container_ensemble",
-                    error="Failed to copy streamed file to container"
+                    error="Failed to copy file to container"
                 )
+            
+            # Clean up temp file
+            temp_file_path.unlink()
             
             logger.info("file_streamed_to_container", container_id=container_id, filename=upload_file.filename, file_size=file_size)
             

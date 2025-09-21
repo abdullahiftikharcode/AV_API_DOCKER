@@ -1,6 +1,7 @@
 import requests
 import json
 import time
+import os
 import asyncio
 import structlog
 import http.client
@@ -419,6 +420,39 @@ class DockerClient:
         except Exception as e:
             logger.error("get_container_status_exception", container_id=container_id, error=str(e))
             return None
+
+    def put_file(self, container_id: str, local_file_path: str, container_path: str) -> bool:
+        """Copy a file from host to container."""
+        try:
+            with open(local_file_path, 'rb') as f:
+                file_data = f.read()
+            
+            # Create tar archive with the file
+            import tarfile
+            import io
+            
+            tar_buffer = io.BytesIO()
+            with tarfile.open(fileobj=tar_buffer, mode='w') as tar:
+                tarinfo = tarfile.TarInfo(name=os.path.basename(container_path))
+                tarinfo.size = len(file_data)
+                tarinfo.mode = 0o644
+                tar.addfile(tarinfo, io.BytesIO(file_data))
+            
+            tar_data = tar_buffer.getvalue()
+            
+            response = self._request(
+                'PUT',
+                f'/v1.41/containers/{container_id}/archive?path={os.path.dirname(container_path)}',
+                headers={'Content-Type': 'application/x-tar'},
+                data=tar_data
+            )
+            logger.info("put_file_response", container_id=container_id, local_path=local_file_path, container_path=container_path, status_code=response.status_code)
+            if response.status_code != 200:
+                logger.error("put_file_failed", container_id=container_id, status_code=response.status_code, response_text=response.text[:500])
+            return response.status_code == 200
+        except Exception as e:
+            logger.error("put_file_exception", container_id=container_id, error=str(e))
+            return False
 
     def put_archive(self, container_id: str, path: str, data: bytes) -> bool:
         try:

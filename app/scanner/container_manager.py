@@ -315,6 +315,15 @@ FILE_SIZE={len(file_content)}
             import shutil
             shutil.copy2(temp_file_path, unique_file_path)
             
+            # Debug logging
+            logger.info("file_copy_debug", 
+                       temp_file=str(temp_file_path), 
+                       scan_dir=str(scan_dir), 
+                       unique_file=str(unique_file_path),
+                       temp_file_exists=temp_file_path.exists(),
+                       unique_file_exists=unique_file_path.exists(),
+                       scan_dir_exists=scan_dir.exists())
+            
             # Store scan_dir for cleanup later
             self._current_scan_dir = scan_dir
             
@@ -368,6 +377,13 @@ FILE_SIZE={len(file_content)}
             if not container_id:
                 logger.error("streaming_container_creation_failed")
                 return None
+            
+            # Debug logging for mount info
+            logger.info("container_mount_debug", 
+                       scan_dir=str(scan_dir),
+                       scan_dir_contents=list(scan_dir.iterdir()) if scan_dir.exists() else [],
+                       unique_file=str(unique_file_path),
+                       unique_file_exists=unique_file_path.exists())
             
             logger.info("streaming_container_created_successfully", container_id=container_id)
             

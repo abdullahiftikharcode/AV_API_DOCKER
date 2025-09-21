@@ -34,7 +34,7 @@ class ContainerManager:
         self.docker_client = None
         self.container_image = "virus-scanner-scanner:latest"
         self.scan_timeout = settings.SCAN_TIMEOUT_SECONDS
-        self.max_memory = "16g"  # Increased to 16GB for large file scanning
+        self.max_memory = f"{settings.MEMORY_LIMIT_MB}m"  # Use configured memory limit (3GB)
         self.max_cpu = "1.0"    # Updated to 1 CPU core for concurrent containers
     
     def get_allowed_extensions(self) -> List[str]:

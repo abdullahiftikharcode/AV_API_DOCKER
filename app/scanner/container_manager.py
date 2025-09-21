@@ -89,7 +89,7 @@ class ContainerManager:
                     'ML_ENABLE_PE_ANALYSIS': str(settings.ML_ENABLE_PE_ANALYSIS),
                     'ML_ENABLE_ENTROPY_ANALYSIS': str(settings.ML_ENABLE_ENTROPY_ANALYSIS),
                     # Primary method: Environment variables
-                    'SCAN_FILE_PATH': f'/scan/{scan_filename}',
+                    'SCAN_FILE_PATH': f'/scan/{simple_filename}',
                     'SCAN_TIMEOUT': str(self.scan_timeout),
                     'SCAN_MODE': 'environment',
                     # Pass through HMAC configuration to child containers
@@ -222,7 +222,7 @@ FILE_SIZE={len(file_content)}
                     'ML_ENABLE_PE_ANALYSIS': str(settings.ML_ENABLE_PE_ANALYSIS),
                     'ML_ENABLE_ENTROPY_ANALYSIS': str(settings.ML_ENABLE_ENTROPY_ANALYSIS),
                     # Primary method: Environment variables
-                    'SCAN_FILE_PATH': f'/scan/{scan_filename}',
+                    'SCAN_FILE_PATH': f'/scan/{simple_filename}',
                     'SCAN_TIMEOUT': str(self.scan_timeout),
                     'SCAN_MODE': 'streaming',
                     # Pass through HMAC configuration to child containers
@@ -378,7 +378,7 @@ FILE_SIZE={len(file_content)}
                     'ML_ENABLE_PE_ANALYSIS': str(settings.ML_ENABLE_PE_ANALYSIS),
                     'ML_ENABLE_ENTROPY_ANALYSIS': str(settings.ML_ENABLE_ENTROPY_ANALYSIS),
                     # Primary method: Environment variables
-                    'SCAN_FILE_PATH': f'/scan/{scan_filename}',
+                    'SCAN_FILE_PATH': f'/scan/{simple_filename}',
                     'SCAN_TIMEOUT': str(self.scan_timeout),
                     'SCAN_MODE': 'streaming',
                     # Pass through HMAC configuration to child containers

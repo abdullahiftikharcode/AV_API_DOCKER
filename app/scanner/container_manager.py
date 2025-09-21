@@ -488,45 +488,8 @@ FILE_SIZE={len(file_content)}
                 
                 logger.info("file_put_success", container_id=container_id, filename=simple_filename)
                 
-                # Add a delay to ensure file is properly written to container filesystem
-                await asyncio.sleep(1.0)
-                
-                # Verify the file exists in the container before proceeding
-                max_retries = 5
-                for attempt in range(max_retries):
-                    try:
-                        # Check if file exists in container
-                        result = client.exec_in_container(container_id, ["test", "-f", "/scan/scan_file.exe"])
-                        if result and result.get('ExitCode') == 0:
-                            logger.info("file_verification_success", container_id=container_id, attempt=attempt+1)
-                            break
-                        else:
-                            # Additional debugging - list contents of /scan directory
-                            debug_result = client.exec_in_container(container_id, ["ls", "-la", "/scan"])
-                            if debug_result:
-                                logger.warning("file_verification_failed", container_id=container_id, attempt=attempt+1, 
-                                             exit_code=result.get('ExitCode') if result else 'no_result',
-                                             scan_dir_contents=debug_result.get('stdout', ''))
-                            else:
-                                logger.warning("file_verification_failed", container_id=container_id, attempt=attempt+1, 
-                                             exit_code=result.get('ExitCode') if result else 'no_result')
-                            
-                            # Also check if the file exists with a different name or location
-                            find_result = client.exec_in_container(container_id, ["find", "/scan", "-name", "*.exe", "-type", "f"])
-                            if find_result:
-                                logger.warning("file_search_result", container_id=container_id, attempt=attempt+1,
-                                             find_output=find_result.get('stdout', ''))
-                            
-                            if attempt < max_retries - 1:
-                                await asyncio.sleep(0.5)
-                    except Exception as e:
-                        logger.warning("file_verification_exception", container_id=container_id, attempt=attempt+1, error=str(e))
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(0.5)
-                else:
-                    logger.error("file_verification_timeout", container_id=container_id)
-                    client.remove_container(container_id, force=True)
-                    return None
+                # Add a small delay to ensure file is properly written to container filesystem
+                await asyncio.sleep(0.5)
                 
             except Exception as e:
                 logger.error("file_put_exception", container_id=container_id, error=str(e))

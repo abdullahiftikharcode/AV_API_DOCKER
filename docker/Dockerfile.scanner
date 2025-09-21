@@ -174,6 +174,22 @@ echo "=== END DEBUG ==="\n\
 # Method 1: Check environment variables (primary method)\n\
 if [ -n "$SCAN_FILE_PATH" ] && [ -n "$SCAN_TIMEOUT" ]; then\n\
     echo "Using environment variables: SCAN_FILE_PATH=$SCAN_FILE_PATH, SCAN_TIMEOUT=$SCAN_TIMEOUT"\n\
+    # Wait for the file to be available if it doesn't exist yet\n\
+    if [ ! -f "$SCAN_FILE_PATH" ]; then\n\
+        echo "Waiting for file to be available: $SCAN_FILE_PATH"\n\
+        max_wait=30\n\
+        wait_count=0\n\
+        while [ ! -f "$SCAN_FILE_PATH" ] && [ $wait_count -lt $max_wait ]; do\n\
+            sleep 1\n\
+            wait_count=$((wait_count + 1))\n\
+            echo "Waiting for file... ($wait_count/$max_wait)"\n\
+        done\n\
+        if [ ! -f "$SCAN_FILE_PATH" ]; then\n\
+            echo "ERROR: File not found after waiting: $SCAN_FILE_PATH"\n\
+            exit 1\n\
+        fi\n\
+        echo "File is now available: $SCAN_FILE_PATH"\n\
+    fi\n\
     exec python /app/app/scanner/scan_worker.py --file "$SCAN_FILE_PATH" --timeout "$SCAN_TIMEOUT"\n\
 fi\n\
 \n\
@@ -183,16 +199,49 @@ if [ -f /scan_config.env ]; then\n\
     source /scan_config.env\n\
     if [ -n "$SCAN_FILE_PATH" ] && [ -n "$SCAN_TIMEOUT" ]; then\n\
         echo "Using config file: SCAN_FILE_PATH=$SCAN_FILE_PATH, SCAN_TIMEOUT=$SCAN_TIMEOUT"\n\
+        # Wait for the file to be available if it doesn't exist yet\n\
+        if [ ! -f "$SCAN_FILE_PATH" ]; then\n\
+            echo "Waiting for file to be available: $SCAN_FILE_PATH"\n\
+            max_wait=30\n\
+            wait_count=0\n\
+            while [ ! -f "$SCAN_FILE_PATH" ] && [ $wait_count -lt $max_wait ]; do\n\
+                sleep 1\n\
+                wait_count=$((wait_count + 1))\n\
+                echo "Waiting for file... ($wait_count/$max_wait)"\n\
+            done\n\
+            if [ ! -f "$SCAN_FILE_PATH" ]; then\n\
+                echo "ERROR: File not found after waiting: $SCAN_FILE_PATH"\n\
+                exit 1\n\
+            fi\n\
+            echo "File is now available: $SCAN_FILE_PATH"\n\
+        fi\n\
         exec python /app/app/scanner/scan_worker.py --file "$SCAN_FILE_PATH" --timeout "$SCAN_TIMEOUT"\n\
     fi\n\
 fi\n\
 \n\
 # Method 3: Fallback - try to find files in /scan directory\n\
 echo "No configuration found, checking /scan directory..."\n\
-if [ -d /scan ] && [ "$(ls -A /scan)" ]; then\n\
-    SCAN_FILE=$(ls /scan/* | head -n1)\n\
-    echo "Found file in /scan: $SCAN_FILE"\n\
-    exec python /app/app/scanner/scan_worker.py --file "$SCAN_FILE" --timeout "${SCAN_TIMEOUT:-300}"\n\
+if [ -d /scan ]; then\n\
+    echo "Waiting for files to appear in /scan directory..."\n\
+    max_wait=30\n\
+    wait_count=0\n\
+    while [ ! "$(ls -A /scan 2>/dev/null)" ] && [ $wait_count -lt $max_wait ]; do\n\
+        sleep 1\n\
+        wait_count=$((wait_count + 1))\n\
+        echo "Waiting for files in /scan... ($wait_count/$max_wait)"\n\
+    done\n\
+    \n\
+    if [ "$(ls -A /scan 2>/dev/null)" ]; then\n\
+        SCAN_FILE=$(ls /scan/* | head -n1)\n\
+        echo "Found file in /scan: $SCAN_FILE"\n\
+        exec python /app/app/scanner/scan_worker.py --file "$SCAN_FILE" --timeout "${SCAN_TIMEOUT:-300}"\n\
+    else\n\
+        echo "ERROR: No files found in /scan directory after waiting"\n\
+        exit 1\n\
+    fi\n\
+else\n\
+    echo "ERROR: /scan directory does not exist"\n\
+    exit 1\n\
 fi\n\
 \n\
 # Method 4: Last resort - show help\n\

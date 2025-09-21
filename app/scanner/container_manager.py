@@ -301,6 +301,11 @@ FILE_SIZE={len(file_content)}
             # Create container but don't start yet
             client = self._get_docker_client()
             
+            # Get the parent directory of the temp file for mounting
+            temp_file_path_obj = Path(temp_file_path)
+            temp_dir = temp_file_path_obj.parent
+            temp_filename = temp_file_path_obj.name
+            
             # Use volume mount instead of put_file
             container_config = {
                 'image': self.container_image,
@@ -308,7 +313,7 @@ FILE_SIZE={len(file_content)}
                 'volumes': {
                     str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
                     'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'},  # Shared ClamAV virus definitions
-                    temp_file_path: {'bind': f'/scan/{scan_filename}', 'mode': 'ro'}  # Mount the temp file directly
+                    str(temp_dir): {'bind': '/scan', 'mode': 'ro'}  # Mount the temp directory containing the file
                 },
                 'environment': {
                     'MAX_FILE_SIZE_MB': str(settings.MAX_FILE_SIZE_MB),
@@ -316,7 +321,7 @@ FILE_SIZE={len(file_content)}
                     'ML_ENABLE_PE_ANALYSIS': str(settings.ML_ENABLE_PE_ANALYSIS),
                     'ML_ENABLE_ENTROPY_ANALYSIS': str(settings.ML_ENABLE_ENTROPY_ANALYSIS),
                     # Primary method: Environment variables
-                    'SCAN_FILE_PATH': f'/scan/{scan_filename}',
+                    'SCAN_FILE_PATH': f'/scan/{temp_filename}',
                     'SCAN_TIMEOUT': str(self.scan_timeout),
                     'SCAN_MODE': 'streaming',
                     # Pass through HMAC configuration to child containers

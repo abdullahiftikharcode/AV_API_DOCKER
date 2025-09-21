@@ -432,17 +432,14 @@ FILE_SIZE={len(file_content)}
             
             # Copy the file to the container using put_file method
             try:
-                with open(unique_file_path, 'rb') as f:
-                    file_content = f.read()
-                
                 # Put the file in the container
-                success = client.put_file(container_id, '/scan/scan_file.exe', file_content)
+                success = client.put_file(container_id, str(unique_file_path), '/scan/scan_file.exe')
                 if not success:
                     logger.error("file_put_failed", container_id=container_id, filename=simple_filename)
                     client.remove_container(container_id, force=True)
                     return None
                 
-                logger.info("file_put_success", container_id=container_id, filename=simple_filename, file_size=len(file_content))
+                logger.info("file_put_success", container_id=container_id, filename=simple_filename)
                 
             except Exception as e:
                 logger.error("file_put_exception", container_id=container_id, error=str(e))

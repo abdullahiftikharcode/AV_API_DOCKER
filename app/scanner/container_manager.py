@@ -328,6 +328,16 @@ FILE_SIZE={len(file_content)}
             import time
             time.sleep(0.1)  # Small delay to ensure file is written to disk
             
+            # Create the target directory structure in the container before mounting
+            # This prevents Docker from creating a directory instead of mounting the file
+            target_dir = Path("/var/tmp/container_scan")
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target_file = target_dir / "scan_file.exe"
+            
+            # Copy file to the target location for mounting
+            shutil.copy2(unique_file_path, target_file)
+            os.chmod(target_file, 0o644)
+            
             # Debug logging
             temp_file_path_obj = Path(temp_file_path)
             logger.info("file_copy_debug", 
@@ -342,17 +352,17 @@ FILE_SIZE={len(file_content)}
             self._current_scan_dir = scan_dir
             
             # Verify file exists before container creation
-            if not unique_file_path.exists():
+            if not target_file.exists():
                 logger.error("file_copy_verification_failed", 
                            scan_dir=str(scan_dir), 
-                           unique_file=str(unique_file_path),
+                           target_file=str(target_file),
                            scan_dir_contents=list(scan_dir.iterdir()) if scan_dir.exists() else [])
                 return None
             
             logger.info("file_copy_verification_success", 
                        scan_dir=str(scan_dir), 
-                       unique_file=str(unique_file_path),
-                       file_size=unique_file_path.stat().st_size)
+                       target_file=str(target_file),
+                       file_size=target_file.stat().st_size)
             
             # Use volume mount for file transfer (more reliable than put_file)
             container_config = {
@@ -361,7 +371,7 @@ FILE_SIZE={len(file_content)}
                 'volumes': {
                     str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
                     'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'},  # Shared ClamAV virus definitions
-                    str(unique_file_path.absolute()): {'bind': '/scan/scan_file.exe', 'mode': 'ro'},  # Mount the file directly
+                    str(target_file.absolute()): {'bind': '/scan/scan_file.exe', 'mode': 'ro'},  # Mount the file directly
                 },
                 'environment': {
                     'MAX_FILE_SIZE_MB': str(settings.MAX_FILE_SIZE_MB),
@@ -403,15 +413,15 @@ FILE_SIZE={len(file_content)}
                        scan_dir=str(scan_dir.absolute()),
                        scan_dir_exists=scan_dir.exists(),
                        scan_dir_contents=final_scan_dir_contents,
-                       unique_file_exists=unique_file_path.exists(),
-                       unique_file_size=unique_file_path.stat().st_size if unique_file_path.exists() else 0)
+                       target_file_exists=target_file.exists(),
+                       target_file_size=target_file.stat().st_size if target_file.exists() else 0)
             
             # Log streaming container creation (without sensitive config details)
             logger.info("creating_streaming_container_with_volume", 
                        container_id="pending", 
                        image=self.container_image, 
                        temp_file=temp_file_path,
-                       volume_mount=str(unique_file_path.absolute()) + ":/scan/scan_file.exe:ro")
+                       volume_mount=str(target_file.absolute()) + ":/scan/scan_file.exe:ro")
             
             container_id = client.create_container(container_config)
             if not container_id:
@@ -451,17 +461,17 @@ FILE_SIZE={len(file_content)}
             
             # File is now available via volume mount at /scan/scan_file.exe
             # Verify file still exists after container creation
-            if unique_file_path.exists():
+            if target_file.exists():
                 logger.info("file_mounted_via_volume", 
                            container_id=container_id, 
                            filename=simple_filename, 
-                           scan_dir=str(scan_dir),
-                           file_size=unique_file_path.stat().st_size)
+                           target_file=str(target_file),
+                           file_size=target_file.stat().st_size)
             else:
                 logger.error("file_missing_after_container_creation", 
                            container_id=container_id, 
                            filename=simple_filename, 
-                           scan_dir=str(scan_dir),
+                           target_file=str(target_file),
                            scan_dir_contents=list(scan_dir.iterdir()) if scan_dir.exists() else [])
             
             # The /scan directory is now mounted from the host

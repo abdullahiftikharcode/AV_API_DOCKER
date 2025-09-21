@@ -337,7 +337,7 @@ FILE_SIZE={len(file_content)}
                 'volumes': {
                     str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
                     'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'},  # Shared ClamAV virus definitions
-                    str(scan_dir): {'bind': '/scan', 'mode': 'ro'},  # Mount the scan directory
+                    str(scan_dir.absolute()): {'bind': '/scan', 'mode': 'ro'},  # Mount the scan directory with absolute path
                 },
                 'environment': {
                     'MAX_FILE_SIZE_MB': str(settings.MAX_FILE_SIZE_MB),
@@ -374,7 +374,11 @@ FILE_SIZE={len(file_content)}
             }
             
             # Log streaming container creation (without sensitive config details)
-            logger.info("creating_streaming_container_with_volume", container_id="pending", image=self.container_image, temp_file=temp_file_path)
+            logger.info("creating_streaming_container_with_volume", 
+                       container_id="pending", 
+                       image=self.container_image, 
+                       temp_file=temp_file_path,
+                       volume_mount=str(scan_dir.absolute()) + ":/scan:ro")
             
             container_id = client.create_container(container_config)
             if not container_id:

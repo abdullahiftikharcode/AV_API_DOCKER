@@ -301,10 +301,22 @@ FILE_SIZE={len(file_content)}
             # Create container but don't start yet
             client = self._get_docker_client()
             
-            # Get the parent directory of the temp file for mounting
+            # Create a unique directory for this scan to avoid conflicts
             temp_file_path_obj = Path(temp_file_path)
             temp_dir = temp_file_path_obj.parent
             temp_filename = temp_file_path_obj.name
+            
+            # Create a unique subdirectory for this scan
+            scan_dir = temp_dir / f"scan_{temp_filename}"
+            scan_dir.mkdir(exist_ok=True)
+            
+            # Copy the temp file to the unique scan directory
+            unique_file_path = scan_dir / temp_filename
+            import shutil
+            shutil.copy2(temp_file_path, unique_file_path)
+            
+            # Store scan_dir for cleanup later
+            self._current_scan_dir = scan_dir
             
             # Use volume mount instead of put_file
             container_config = {
@@ -313,7 +325,7 @@ FILE_SIZE={len(file_content)}
                 'volumes': {
                     str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
                     'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'},  # Shared ClamAV virus definitions
-                    str(temp_dir): {'bind': '/scan', 'mode': 'ro'}  # Mount the temp directory containing the file
+                    str(scan_dir): {'bind': '/scan', 'mode': 'ro'}  # Mount the unique scan directory
                 },
                 'environment': {
                     'MAX_FILE_SIZE_MB': str(settings.MAX_FILE_SIZE_MB),
@@ -814,6 +826,7 @@ FILE_SIZE={len(file_content)}
         """Scan a file by streaming it directly to a child container without saving to main container."""
         start_time = time.time()
         container_id = None
+        scan_dir = None
         
         try:
             # Validate file size during streaming
@@ -865,9 +878,6 @@ FILE_SIZE={len(file_content)}
             
             # Wait for container to complete (it will run the scan automatically)
             result = await self.wait_for_container_completion(container_id, self.scan_timeout)
-            
-            # Clean up temp file
-            temp_file_path.unlink()
             
             # Calculate scan duration
             scan_duration_ms = int((time.time() - start_time) * 1000)
@@ -923,9 +933,25 @@ FILE_SIZE={len(file_content)}
                 error=f"Streaming scan failed: {str(e)}"
             )
         finally:
-            # Always cleanup container
+            # Always cleanup container and temp files
             if container_id:
                 await self.cleanup_container(container_id)
+            # Clean up temp file and scan directory
+            if 'temp_file_path' in locals():
+                try:
+                    temp_file_path.unlink()
+                    logger.debug("temp_file_cleaned_up", path=str(temp_file_path))
+                except Exception as e:
+                    logger.warning("temp_file_cleanup_failed", path=str(temp_file_path), error=str(e))
+            if hasattr(self, '_current_scan_dir') and self._current_scan_dir:
+                try:
+                    import shutil
+                    shutil.rmtree(self._current_scan_dir, ignore_errors=True)
+                    logger.debug("scan_dir_cleaned_up", path=str(self._current_scan_dir))
+                    self._current_scan_dir = None
+                except Exception as e:
+                    logger.warning("scan_dir_cleanup_failed", path=str(self._current_scan_dir), error=str(e))
+                    self._current_scan_dir = None
 
 
     async def execute_python_code(self, python_code: str, timeout: int = 300) -> ContainerScanResult:

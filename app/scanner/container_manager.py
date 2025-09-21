@@ -267,13 +267,8 @@ FILE_SIZE={len(file_content)}
             
             logger.info("streaming_container_started", container_id=container_id)
             
-            # Create the /scan directory in the container
-            exec_result = client.exec_in_container(container_id, ['mkdir', '-p', '/scan'])
-            if not exec_result or exec_result.get('ExitCode', 1) != 0:
-                logger.error("failed_to_create_scan_dir", container_id=container_id)
-                client.remove_container(container_id, force=True)
-                return None
-            
+            # The /scan directory is now created by the startup script
+            # No need to execute mkdir command - the container handles this internally
             logger.info("streaming_container_ready", container_id=container_id, filename=scan_filename)
             
             return container_id

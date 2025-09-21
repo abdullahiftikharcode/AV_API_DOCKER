@@ -392,9 +392,29 @@ class DockerClient:
                     logger.error("exec_in_container_start_failed", container_id=container_id, exec_id=exec_id, status_code=response.status_code)
                     return None
 
-            # Wait a bit for execution to complete
+            # Wait for execution to complete with proper timeout
             import time
-            time.sleep(1)
+            max_wait_time = 300  # 5 minutes max
+            check_interval = 2   # Check every 2 seconds
+            waited = 0
+            
+            while waited < max_wait_time:
+                time.sleep(check_interval)
+                waited += check_interval
+                
+                # Check if exec is still running
+                result_response = self._request('GET', f'/v1.41/exec/{exec_id}/json')
+                if result_response.status_code == 200:
+                    result = result_response.json()
+                    if not result.get('Running', True):
+                        # Execution completed
+                        logger.info("exec_completed", container_id=container_id, exec_id=exec_id, exit_code=result.get('ExitCode', 0))
+                        break
+                else:
+                    logger.warning("exec_status_check_failed", container_id=container_id, exec_id=exec_id, status_code=result_response.status_code)
+            
+            if waited >= max_wait_time:
+                logger.warning("exec_timeout", container_id=container_id, exec_id=exec_id, waited_seconds=waited)
             
             # Get exec result
             response = self._request('GET', f'/v1.41/exec/{exec_id}/json')

@@ -40,6 +40,9 @@ class MLDetector(BaseScanner):
         for byte in data:
             frequency[byte] = frequency.get(byte, 0) + 1
         
+        print(f"DEBUG: Unique bytes found: {len(frequency)}")
+        print(f"DEBUG: Sample frequencies: {dict(list(frequency.items())[:10])}")
+        
         # Calculate entropy
         entropy = 0.0
         data_len = len(data)
@@ -48,6 +51,7 @@ class MLDetector(BaseScanner):
             if p > 0:
                 entropy -= p * math.log2(p)
         
+        print(f"DEBUG: Calculated entropy: {entropy}")
         return entropy
 
     def _should_skip_entropy_analysis(self, file_path: Path) -> bool:
@@ -84,6 +88,22 @@ class MLDetector(BaseScanner):
         """Convert technical analysis to human-readable threat descriptions."""
         threats = []
         
+        # Check file extension for additional context
+        file_extension = file_path.suffix.lower()
+        
+        # For executables, both very high AND very low entropy are suspicious
+        if file_extension in ['.exe', '.dll', '.sys']:
+            if entropy > 7.5:
+                threats.append("Suspicious Executable (High Entropy)")
+            elif entropy < 1.0:  # Very low entropy in executables is suspicious
+                threats.append("Suspicious Executable (Low Entropy)")
+        elif file_extension in ['.js', '.vbs', '.ps1']:
+            if entropy > 7.0:
+                threats.append("Suspicious Script")
+        elif file_extension in ['.doc', '.docx', '.pdf']:
+            if entropy > 7.2:
+                threats.append("Suspicious Document")
+        
         # High entropy indicates obfuscated or encrypted content
         if entropy > 7.5:
             threats.append("Obfuscated")
@@ -92,19 +112,9 @@ class MLDetector(BaseScanner):
         if entropy > 7.8:
             threats.append("Encrypted")
         
-        # Check file extension for additional context
-        file_extension = file_path.suffix.lower()
-        
-        # Add context-specific threats
-        if file_extension in ['.exe', '.dll', '.sys']:
-            if entropy > 7.5:
-                threats.append("Suspicious Executable")
-        elif file_extension in ['.js', '.vbs', '.ps1']:
-            if entropy > 7.0:
-                threats.append("Suspicious Script")
-        elif file_extension in ['.doc', '.docx', '.pdf']:
-            if entropy > 7.2:
-                threats.append("Suspicious Document")
+        # Very low entropy in any file type is suspicious (except for specific cases)
+        if entropy < 0.5 and file_extension not in ['.txt', '.log', '.csv']:
+            threats.append("Unusual Content (Low Entropy)")
         
         # If no specific threats found but entropy is concerning
         if not threats and entropy > 7.0:
@@ -120,11 +130,21 @@ class MLDetector(BaseScanner):
                 print(f"DEBUG: Skipping entropy analysis for {file_path.name} (unsuitable file type)")
                 return False, 0.0, []
             
+            print(f"DEBUG: Reading file: {file_path}")
+            print(f"DEBUG: File exists: {file_path.exists()}")
+            if file_path.exists():
+                print(f"DEBUG: File size: {file_path.stat().st_size} bytes")
+            
             with open(file_path, 'rb') as f:
                 data = f.read()
             
+            print(f"DEBUG: Data length: {len(data)} bytes")
             if len(data) == 0:
+                print("DEBUG: File is empty, returning safe")
                 return False, 0.0, []
+            
+            # Show first few bytes for debugging
+            print(f"DEBUG: First 16 bytes: {data[:16].hex()}")
             
             # Calculate file entropy
             entropy = self._calculate_entropy(data)
@@ -144,6 +164,8 @@ class MLDetector(BaseScanner):
                     confidence = 0.7  # High confidence for obfuscated content
                 elif entropy > 7.0:
                     confidence = 0.5  # Medium confidence for unusual content
+                elif entropy < 1.0:
+                    confidence = 0.8  # High confidence for very low entropy (suspicious)
                 else:
                     confidence = 0.3  # Low confidence
             else:
@@ -155,6 +177,8 @@ class MLDetector(BaseScanner):
             
         except Exception as e:
             print(f"Error in ML analysis: {e}")
+            import traceback
+            traceback.print_exc()
             return False, 0.0, []
 
     async def scan(self, file_path: Path) -> ScanResult:

@@ -371,7 +371,6 @@ FILE_SIZE={len(file_content)}
                 'volumes': {
                     str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
                     'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'},  # Shared ClamAV virus definitions
-                    str(target_file.parent.absolute()): {'bind': '/tmp/scan_files', 'mode': 'ro'},  # Mount the directory containing the file
                 },
                 'environment': {
                     'MAX_FILE_SIZE_MB': str(settings.MAX_FILE_SIZE_MB),
@@ -417,11 +416,11 @@ FILE_SIZE={len(file_content)}
                        target_file_size=target_file.stat().st_size if target_file.exists() else 0)
             
             # Log streaming container creation (without sensitive config details)
-            logger.info("creating_streaming_container_with_volume", 
+            logger.info("creating_streaming_container_with_put_file", 
                        container_id="pending", 
                        image=self.container_image, 
                        temp_file=temp_file_path,
-                       volume_mount=str(target_file.parent.absolute()) + ":/tmp/scan_files:ro")
+                       source_file=str(unique_file_path))
             
             container_id = client.create_container(container_config)
             if not container_id:
@@ -459,20 +458,43 @@ FILE_SIZE={len(file_content)}
                 client.remove_container(container_id, force=True)
                 return None
             
-            # File is now available via volume mount at /scan/scan_file.exe
-            # Verify file still exists after container creation
-            if target_file.exists():
-                logger.info("file_mounted_via_volume", 
-                           container_id=container_id, 
-                           filename=simple_filename, 
-                           target_file=str(target_file),
-                           file_size=target_file.stat().st_size)
+            # Wait for the container to create the /scan directory
+            max_retries = 10
+            for attempt in range(max_retries):
+                try:
+                    # Check if /scan directory exists by trying to create it
+                    result = client.exec_in_container(container_id, ["mkdir", "-p", "/scan"])
+                    if result and result.get('ExitCode') == 0:
+                        logger.info("scan_directory_ready", container_id=container_id, attempt=attempt+1)
+                        break
+                except Exception as e:
+                    logger.debug("scan_directory_wait", container_id=container_id, attempt=attempt+1, error=str(e))
+                
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(0.5)
             else:
-                logger.error("file_missing_after_container_creation", 
-                           container_id=container_id, 
-                           filename=simple_filename, 
-                           target_file=str(target_file),
-                           scan_dir_contents=list(scan_dir.iterdir()) if scan_dir.exists() else [])
+                logger.error("scan_directory_timeout", container_id=container_id)
+                client.remove_container(container_id, force=True)
+                return None
+            
+            # Copy the file to the container using put_file method
+            try:
+                # Put the file in the container
+                success = client.put_file(container_id, str(unique_file_path), '/scan/scan_file.exe')
+                if not success:
+                    logger.error("file_put_failed", container_id=container_id, filename=simple_filename)
+                    client.remove_container(container_id, force=True)
+                    return None
+                
+                logger.info("file_put_success", container_id=container_id, filename=simple_filename)
+                
+                # Add a small delay to ensure file is properly written to container filesystem
+                await asyncio.sleep(0.5)
+                
+            except Exception as e:
+                logger.error("file_put_exception", container_id=container_id, error=str(e))
+                client.remove_container(container_id, force=True)
+                return None
             
             # The /scan directory is now mounted from the host
             logger.info("streaming_container_ready", container_id=container_id, filename=scan_filename)

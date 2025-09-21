@@ -111,7 +111,7 @@ class ContainerManager:
                 'cpu_quota': int(float(self.max_cpu) * 100000),
                 'network_disabled': False,  # Enable limited network access for MalwareBazaar API
                 'read_only': False,  # Allow writes for ClamAV logs
-                'tmpfs': {'/tmp': 'size=400m'},  # Temporary filesystem (increased for ClamAV databases)
+                'tmpfs': {'/tmp': 'size=100m'},  # Temporary filesystem (reduced since ClamAV DBs are now shared)
                 'detach': False,
                 'AutoRemove': False, # Disable auto-removal to capture logs
             }
@@ -244,7 +244,7 @@ FILE_SIZE={len(file_content)}
                 'cpu_quota': int(float(self.max_cpu) * 100000),
                 'network_disabled': False,  # Enable limited network access for MalwareBazaar API
                 'read_only': False,  # Allow writes for ClamAV logs
-                'tmpfs': {'/tmp': 'size=400m'},  # Temporary filesystem (increased for ClamAV databases)
+                'tmpfs': {'/tmp': 'size=100m'},  # Temporary filesystem (reduced since ClamAV DBs are now shared)
                 'detach': False,
                 'AutoRemove': False, # Disable auto-removal to capture logs
             }
@@ -896,7 +896,7 @@ FILE_SIZE={len(file_content)}
                 'cpu_quota': int(float(self.max_cpu) * 100000),
                 'network_disabled': False,
                 'read_only': False,
-                'tmpfs': {'/tmp': 'size=400m'},
+                'tmpfs': {'/tmp': 'size=100m'},  # Temporary filesystem (reduced since ClamAV DBs are now shared)
                 'detach': False,
                 'AutoRemove': False,
                 'stdin_open': True,  # Enable stdin for piping

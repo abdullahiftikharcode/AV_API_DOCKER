@@ -295,7 +295,7 @@ FILE_SIZE={len(file_content)}
     async def create_streaming_container_with_volume(self, filename: str, temp_file_path: str) -> Optional[str]:
         """Create a fresh container for streaming file uploads using volume mount."""
         try:
-            # Create a temporary file name for the scan
+            # Use the actual temp filename (which includes random prefix)
             scan_filename = filename
             
             # Create container but don't start yet
@@ -321,7 +321,7 @@ FILE_SIZE={len(file_content)}
                     'ML_ENABLE_PE_ANALYSIS': str(settings.ML_ENABLE_PE_ANALYSIS),
                     'ML_ENABLE_ENTROPY_ANALYSIS': str(settings.ML_ENABLE_ENTROPY_ANALYSIS),
                     # Primary method: Environment variables
-                    'SCAN_FILE_PATH': f'/scan/{temp_filename}',
+                    'SCAN_FILE_PATH': f'/scan/{scan_filename}',
                     'SCAN_TIMEOUT': str(self.scan_timeout),
                     'SCAN_MODE': 'streaming',
                     # Pass through HMAC configuration to child containers
@@ -846,7 +846,7 @@ FILE_SIZE={len(file_content)}
             temp_file.close()
             
             # Create fresh container with volume mount
-            container_id = await self.create_streaming_container_with_volume(upload_file.filename, str(temp_file_path))
+            container_id = await self.create_streaming_container_with_volume(temp_file_path.name, str(temp_file_path))
             if not container_id:
                 temp_file_path.unlink()
                 return ContainerScanResult(

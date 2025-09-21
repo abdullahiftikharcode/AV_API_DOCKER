@@ -316,11 +316,12 @@ FILE_SIZE={len(file_content)}
             shutil.copy2(temp_file_path, unique_file_path)
             
             # Debug logging
+            temp_file_path_obj = Path(temp_file_path)
             logger.info("file_copy_debug", 
                        temp_file=str(temp_file_path), 
                        scan_dir=str(scan_dir), 
                        unique_file=str(unique_file_path),
-                       temp_file_exists=temp_file_path.exists(),
+                       temp_file_exists=temp_file_path_obj.exists(),
                        unique_file_exists=unique_file_path.exists(),
                        scan_dir_exists=scan_dir.exists())
             

@@ -330,6 +330,19 @@ FILE_SIZE={len(file_content)}
             # Store scan_dir for cleanup later
             self._current_scan_dir = scan_dir
             
+            # Verify file exists before container creation
+            if not unique_file_path.exists():
+                logger.error("file_copy_verification_failed", 
+                           scan_dir=str(scan_dir), 
+                           unique_file=str(unique_file_path),
+                           scan_dir_contents=list(scan_dir.iterdir()) if scan_dir.exists() else [])
+                return None
+            
+            logger.info("file_copy_verification_success", 
+                       scan_dir=str(scan_dir), 
+                       unique_file=str(unique_file_path),
+                       file_size=unique_file_path.stat().st_size)
+            
             # Use volume mount for file transfer (more reliable than put_file)
             container_config = {
                 'image': self.container_image,
@@ -417,7 +430,19 @@ FILE_SIZE={len(file_content)}
                 return None
             
             # File is now available via volume mount at /scan/scan_file.exe
-            logger.info("file_mounted_via_volume", container_id=container_id, filename=simple_filename, scan_dir=str(scan_dir))
+            # Verify file still exists after container creation
+            if unique_file_path.exists():
+                logger.info("file_mounted_via_volume", 
+                           container_id=container_id, 
+                           filename=simple_filename, 
+                           scan_dir=str(scan_dir),
+                           file_size=unique_file_path.stat().st_size)
+            else:
+                logger.error("file_missing_after_container_creation", 
+                           container_id=container_id, 
+                           filename=simple_filename, 
+                           scan_dir=str(scan_dir),
+                           scan_dir_contents=list(scan_dir.iterdir()) if scan_dir.exists() else [])
             
             # The /scan directory is now mounted from the host
             logger.info("streaming_container_ready", container_id=container_id, filename=scan_filename)

@@ -157,6 +157,11 @@ else\n\
     exit 1\n\
 fi\n\
 \n\
+# Create /scan directory before running scan worker\n\
+echo "Creating /scan directory..."\n\
+mkdir -p /scan\n\
+echo "✅ /scan directory created successfully"\n\
+\n\
 # Debug: Print environment variables and config\n\
 echo "=== CONFIGURATION DEBUG ==="\n\
 echo "Environment variables:"\n\

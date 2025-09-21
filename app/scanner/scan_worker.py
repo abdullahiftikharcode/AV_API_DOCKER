@@ -135,6 +135,15 @@ async def main():
         scan_dir = Path('/scan')
         if scan_dir.exists():
             print(f"DEBUG: /scan directory exists, contents: {list(scan_dir.iterdir())}")
+            # Also check with ls command for more details
+            import subprocess
+            try:
+                result = subprocess.run(['ls', '-la', '/scan'], capture_output=True, text=True)
+                print(f"DEBUG: ls -la /scan output: {result.stdout}")
+                if result.stderr:
+                    print(f"DEBUG: ls -la /scan stderr: {result.stderr}")
+            except Exception as e:
+                print(f"DEBUG: ls command failed: {e}")
         else:
             print(f"DEBUG: /scan directory does not exist")
         

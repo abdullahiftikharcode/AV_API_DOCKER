@@ -361,7 +361,7 @@ FILE_SIZE={len(file_content)}
                 'volumes': {
                     str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
                     'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'},  # Shared ClamAV virus definitions
-                    str(scan_dir.absolute()): {'bind': '/scan', 'mode': 'ro'},  # Mount the scan directory with absolute path
+                    str(unique_file_path.absolute()): {'bind': '/scan/scan_file.exe', 'mode': 'ro'},  # Mount the file directly
                 },
                 'environment': {
                     'MAX_FILE_SIZE_MB': str(settings.MAX_FILE_SIZE_MB),
@@ -411,7 +411,7 @@ FILE_SIZE={len(file_content)}
                        container_id="pending", 
                        image=self.container_image, 
                        temp_file=temp_file_path,
-                       volume_mount=str(scan_dir.absolute()) + ":/scan:ro")
+                       volume_mount=str(unique_file_path.absolute()) + ":/scan/scan_file.exe:ro")
             
             container_id = client.create_container(container_config)
             if not container_id:

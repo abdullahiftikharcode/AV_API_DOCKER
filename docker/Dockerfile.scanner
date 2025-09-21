@@ -157,16 +157,11 @@ else\n\
     exit 1\n\
 fi\n\
 \n\
-# /scan directory is mounted from host, no need to create it\n\
-echo "Checking /scan directory..."\n\
-if [ -d "/scan" ]; then\n\
-    echo "✅ /scan directory found (mounted from host)"\n\
-    echo "Contents: $(ls -la /scan)"\n\
-else\n\
-    echo "⚠️  /scan directory not found, creating it..."\n\
-    mkdir -p /scan\n\
-    echo "✅ /scan directory created"\n\
-fi\n\
+# Create /scan directory for file mounting\n\
+echo "Creating /scan directory..."\n\
+mkdir -p /scan\n\
+echo "✅ /scan directory created"\n\
+echo "Contents: $(ls -la /scan)"\n\
 \n\
 # Debug: Print environment variables and config\n\
 echo "=== CONFIGURATION DEBUG ==="\n\

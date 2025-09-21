@@ -307,15 +307,26 @@ FILE_SIZE={len(file_content)}
             temp_dir = temp_file_path_obj.parent
             temp_filename = temp_file_path_obj.name
             
-            # Create a unique subdirectory for this scan
-            scan_dir = temp_dir / f"scan_{temp_filename}"
-            scan_dir.mkdir(exist_ok=True)
+            # Create a unique subdirectory for this scan in a more persistent location
+            # Use /var/tmp instead of /tmp to avoid cleanup issues
+            persistent_temp_dir = Path("/var/tmp")
+            scan_dir = persistent_temp_dir / f"scan_{temp_filename}"
+            scan_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Ensure proper permissions
+            import os
+            os.chmod(scan_dir, 0o755)
             
             # Copy the temp file to the unique scan directory with a simple name
             simple_filename = "scan_file.exe"  # Use a simple, predictable name
             unique_file_path = scan_dir / simple_filename
             import shutil
             shutil.copy2(temp_file_path, unique_file_path)
+            
+            # Ensure file permissions and sync to disk
+            os.chmod(unique_file_path, 0o644)
+            import time
+            time.sleep(0.1)  # Small delay to ensure file is written to disk
             
             # Debug logging
             temp_file_path_obj = Path(temp_file_path)
@@ -385,6 +396,15 @@ FILE_SIZE={len(file_content)}
                 'detach': False,
                 'AutoRemove': False, # Disable auto-removal to capture logs
             }
+            
+            # Final verification before container creation
+            final_scan_dir_contents = list(scan_dir.iterdir()) if scan_dir.exists() else []
+            logger.info("pre_container_creation_verification", 
+                       scan_dir=str(scan_dir.absolute()),
+                       scan_dir_exists=scan_dir.exists(),
+                       scan_dir_contents=final_scan_dir_contents,
+                       unique_file_exists=unique_file_path.exists(),
+                       unique_file_size=unique_file_path.stat().st_size if unique_file_path.exists() else 0)
             
             # Log streaming container creation (without sensitive config details)
             logger.info("creating_streaming_container_with_volume", 

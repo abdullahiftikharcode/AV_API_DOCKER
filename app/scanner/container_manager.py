@@ -411,6 +411,25 @@ FILE_SIZE={len(file_content)}
                 client.remove_container(container_id, force=True)
                 return None
             
+            # Wait for the container to create the /scan directory
+            max_retries = 10
+            for attempt in range(max_retries):
+                try:
+                    # Check if /scan directory exists by trying to create it
+                    success = client.execute_command(container_id, "mkdir -p /scan")
+                    if success:
+                        logger.info("scan_directory_ready", container_id=container_id, attempt=attempt+1)
+                        break
+                except Exception as e:
+                    logger.debug("scan_directory_wait", container_id=container_id, attempt=attempt+1, error=str(e))
+                
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(0.5)
+            else:
+                logger.error("scan_directory_timeout", container_id=container_id)
+                client.remove_container(container_id, force=True)
+                return None
+            
             # Copy the file to the container using put_file method
             try:
                 with open(unique_file_path, 'rb') as f:

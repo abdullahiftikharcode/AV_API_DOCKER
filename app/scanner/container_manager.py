@@ -89,7 +89,7 @@ class ContainerManager:
                     'ML_ENABLE_PE_ANALYSIS': str(settings.ML_ENABLE_PE_ANALYSIS),
                     'ML_ENABLE_ENTROPY_ANALYSIS': str(settings.ML_ENABLE_ENTROPY_ANALYSIS),
                     # Primary method: Environment variables
-                    'SCAN_FILE_PATH': f'/scan/{scan_filename}',
+                    'SCAN_FILE_PATH': f'/scan/{simple_filename}',
                     'SCAN_TIMEOUT': str(self.scan_timeout),
                     'SCAN_MODE': 'environment',
                     # Pass through HMAC configuration to child containers
@@ -222,7 +222,7 @@ FILE_SIZE={len(file_content)}
                     'ML_ENABLE_PE_ANALYSIS': str(settings.ML_ENABLE_PE_ANALYSIS),
                     'ML_ENABLE_ENTROPY_ANALYSIS': str(settings.ML_ENABLE_ENTROPY_ANALYSIS),
                     # Primary method: Environment variables
-                    'SCAN_FILE_PATH': f'/scan/{scan_filename}',
+                    'SCAN_FILE_PATH': f'/scan/{simple_filename}',
                     'SCAN_TIMEOUT': str(self.scan_timeout),
                     'SCAN_MODE': 'streaming',
                     # Pass through HMAC configuration to child containers
@@ -297,6 +297,7 @@ FILE_SIZE={len(file_content)}
         try:
             # Use the actual temp filename (which includes random prefix)
             scan_filename = filename
+            simple_filename = "scan_file.exe"  # Use a simple, predictable name
             
             # Create container but don't start yet
             client = self._get_docker_client()
@@ -310,8 +311,9 @@ FILE_SIZE={len(file_content)}
             scan_dir = temp_dir / f"scan_{temp_filename}"
             scan_dir.mkdir(exist_ok=True)
             
-            # Copy the temp file to the unique scan directory
-            unique_file_path = scan_dir / temp_filename
+            # Copy the temp file to the unique scan directory with a simple name
+            simple_filename = "scan_file.exe"  # Use a simple, predictable name
+            unique_file_path = scan_dir / simple_filename
             import shutil
             shutil.copy2(temp_file_path, unique_file_path)
             
@@ -343,7 +345,7 @@ FILE_SIZE={len(file_content)}
                     'ML_ENABLE_PE_ANALYSIS': str(settings.ML_ENABLE_PE_ANALYSIS),
                     'ML_ENABLE_ENTROPY_ANALYSIS': str(settings.ML_ENABLE_ENTROPY_ANALYSIS),
                     # Primary method: Environment variables
-                    'SCAN_FILE_PATH': f'/scan/{scan_filename}',
+                    'SCAN_FILE_PATH': f'/scan/{simple_filename}',
                     'SCAN_TIMEOUT': str(self.scan_timeout),
                     'SCAN_MODE': 'streaming',
                     # Pass through HMAC configuration to child containers

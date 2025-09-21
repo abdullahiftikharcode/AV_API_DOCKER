@@ -3,6 +3,7 @@ from .docker_client import DockerClient
 import tempfile
 import os
 import time
+import json
 import structlog
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -210,7 +211,7 @@ FILE_SIZE={len(file_content)}
             # Use environment variables and file-based configuration instead of command-line arguments
             container_config = {
                 'image': self.container_image,
-                'command': ['sh', '-c', f'while [ ! -f /scan/{scan_filename} ]; do sleep 0.1; done && /start.sh'],  # Wait for file then start
+                'command': ['sh', '-c', 'sleep infinity'],  # Keep container running until we copy the file
                 'volumes': {
                     str(Path(settings.YARA_RULES_PATH).parent): {'bind': '/app/rules', 'mode': 'ro'},
                     'virus-scanner-clamav': {'bind': '/var/lib/clamav', 'mode': 'ro'}  # Shared ClamAV virus definitions
@@ -785,47 +786,74 @@ FILE_SIZE={len(file_content)}
             
             logger.info("file_streamed_to_container", container_id=container_id, filename=upload_file.filename, file_size=file_size)
             
-            # Wait for completion
-            result = await self.wait_for_container_completion(container_id, self.scan_timeout)
-            
-            # Calculate scan duration
-            scan_duration_ms = int((time.time() - start_time) * 1000)
-            
-            if result['success']:
-                # Extract timing information from the scan worker's JSON response
-                scan_result = result['result']
-                
-                # Get the pure scanning time from the container (excluding initialization)
-                pure_scan_duration_ms = scan_result.get('scanDurationMs', 0)
-                
-                # Get the total container time from the container (including all overhead)
-                container_duration_ms = scan_result.get('containerDurationMs', 0)
-                
-                # If container didn't provide timing, fall back to our measurement
-                if container_duration_ms == 0:
-                    container_duration_ms = scan_duration_ms
-                
-                return ContainerScanResult(
-                    safe=scan_result.get('safe', True),
-                    threats=scan_result.get('threats', []),
-                    scan_time=scan_result.get('scanTime', time.strftime("%Y-%m-%dT%H:%M:%S")),
-                    scan_duration_ms=pure_scan_duration_ms,  # Pure scanning time (excluding initialization)
-                    container_duration_ms=container_duration_ms,  # Total container time including all overhead
-                    file_size=scan_result.get('fileSize', file_size),
-                    file_name=scan_result.get('fileName', upload_file.filename),
-                    scan_engine=scan_result.get('scanEngine', 'container_ensemble')
-                )
-            else:
+            # Now execute the scan command in the running container
+            logger.info("executing_scan_command", container_id=container_id, filename=upload_file.filename)
+            exec_result = client.exec_in_container(container_id, ['/start.sh'])
+            if not exec_result or exec_result.get('ExitCode', 1) != 0:
+                logger.error("scan_execution_failed", container_id=container_id, exit_code=exec_result.get('ExitCode', 1))
+                await self.cleanup_container(container_id)
                 return ContainerScanResult(
                     safe=True,
                     threats=[],
                     scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
-                    scan_duration_ms=scan_duration_ms,
+                    scan_duration_ms=int((time.time() - start_time) * 1000),
                     container_duration_ms=0,
                     file_size=file_size,
                     file_name=upload_file.filename,
                     scan_engine="container_ensemble",
-                    error=result['error']
+                    error="Failed to execute scan command"
+                )
+            
+            # Get the scan result from the execution output
+            scan_output = exec_result.get('Output', '')
+            logger.info("scan_execution_completed", container_id=container_id, output_length=len(scan_output))
+            
+            # Parse the JSON result from the scan output
+            try:
+                # Find the JSON result in the output (it should be the last line)
+                lines = scan_output.strip().split('\n')
+                json_result = None
+                for line in reversed(lines):
+                    if line.strip().startswith('{') and line.strip().endswith('}'):
+                        json_result = json.loads(line.strip())
+                        break
+                
+                if json_result:
+                    return ContainerScanResult(
+                        safe=json_result.get('safe', True),
+                        threats=json_result.get('threats', []),
+                        scan_time=json_result.get('scanTime', time.strftime("%Y-%m-%dT%H:%M:%S")),
+                        scan_duration_ms=json_result.get('scanDurationMs', 0),
+                        container_duration_ms=json_result.get('containerDurationMs', 0),
+                        file_size=json_result.get('fileSize', file_size),
+                        file_name=json_result.get('fileName', upload_file.filename),
+                        scan_engine=json_result.get('scanEngine', 'container_ensemble')
+                    )
+                else:
+                    logger.error("no_json_result_found", container_id=container_id, output=scan_output[:500])
+                    return ContainerScanResult(
+                        safe=True,
+                        threats=[],
+                        scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                        scan_duration_ms=int((time.time() - start_time) * 1000),
+                        container_duration_ms=0,
+                        file_size=file_size,
+                        file_name=upload_file.filename,
+                        scan_engine="container_ensemble",
+                        error="No valid scan result found in output"
+                    )
+            except json.JSONDecodeError as e:
+                logger.error("json_parse_error", container_id=container_id, error=str(e), output=scan_output[:500])
+                return ContainerScanResult(
+                    safe=True,
+                    threats=[],
+                    scan_time=time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    scan_duration_ms=int((time.time() - start_time) * 1000),
+                    container_duration_ms=0,
+                    file_size=file_size,
+                    file_name=upload_file.filename,
+                    scan_engine="container_ensemble",
+                    error=f"Failed to parse scan result: {str(e)}"
                 )
                 
         except Exception as e:

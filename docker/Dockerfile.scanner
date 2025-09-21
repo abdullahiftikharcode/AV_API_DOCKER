@@ -157,10 +157,20 @@ else\n\
     exit 1\n\
 fi\n\
 \n\
-# Create /scan directory for file mounting\n\
+# Create /scan directory and copy file from /tmp\n\
 echo "Creating /scan directory..."\n\
 mkdir -p /scan\n\
 echo "✅ /scan directory created"\n\
+\n\
+# Copy file from /tmp to /scan if it exists\n\
+if [ -f "/tmp/scan_file.exe" ]; then\n\
+    echo "Copying file from /tmp/scan_file.exe to /scan/scan_file.exe..."\n\
+    cp /tmp/scan_file.exe /scan/scan_file.exe\n\
+    echo "✅ File copied successfully"\n\
+else\n\
+    echo "⚠️  File not found at /tmp/scan_file.exe"\n\
+fi\n\
+\n\
 echo "Contents: $(ls -la /scan)"\n\
 \n\
 # Debug: Print environment variables and config\n\
